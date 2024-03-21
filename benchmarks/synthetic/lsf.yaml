@@ -1,0 +1,5 @@
+run_bicycle_training:
+    - "-q gpu-lowprio"
+    - "-gpu num=1:j_exclusive=yes:mode=exclusive_process:gmem=4.0G" # Change your memory requirement here
+    # - "-r \"select[(hname != 'e230-dgx2-1' && hname != 'e230-dgx2-2' && hname != 'e230-dgxa100-1' && hname != 'e230-dgxa100-2' && hname != 'e230-dgxa100-3' && hname != 'e230-dgxa100-4' && hname != 'e071-gpu06')]\""
+    # - "-R tensorcore"
