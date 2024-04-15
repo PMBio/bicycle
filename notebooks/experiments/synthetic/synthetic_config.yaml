@@ -1,0 +1,78 @@
+#Config file for run_synthetic.py
+
+# DATA GENERATION ####################
+n_factors: 0
+add_covariates: False
+n_covariates:  0 # Number of covariates
+covariate_strength: 5.0
+correct_covariates: False
+intervention_type_simulation: &intervention_type_simulation "Cas9"
+intervention_type_inference: &intervention_type_inference "Cas9"
+n_genes: &n_genes 10  # Number of modelled genes
+rank_w_cov_factor: *n_genes  # Same as dictys: #min(TFs, N_GENES-1)
+graph_type: &graph_type "erdos-renyi"
+edge_assignment: &edge_assignment "random-uniform"
+sem: "linear-ou"
+graph_kwargs: {
+    "abs_weight_low": 0.25,
+    "abs_weight_high": 0.95,
+    "p_success": 0.5,
+    "expected_density": 2,
+    "noise_scale": 0.5,
+    "intervention_scale": 0.1,
+}
+n_additional_entries: 12
+n_contexts: *n_genes # Number of contexts, actual value += 1 in python script
+n_samples_control: 500
+n_samples_per_perturbation: 250
+perfect_interventions: True
+make_contractive: True
+make_counts: True
+synthetic_T : &synthetic_T 1.0
+library_size_range_factors: [10, 100]
+
+# TRAINING ####################
+lr: 1.0e-3 #3e-4
+batch_size: &batch_size 10_000
+USE_INITS: False
+use_encoder: &use_encoder False
+n_epochs: 5 #51000
+early_stopping: False
+early_stopping_patience: 500
+early_stopping_min_delta: 0.01
+# Maybe this helps to stop the loss from growing late during training (see current version
+# of Plot_Diagnostics.ipynb)
+optimizer: &optimizer "adam" #"rmsprop" #"adam"
+beta1: &beta1 0.5
+beta2: &beta2 0.9
+optimizer_kwargs: {
+    "betas": [*beta1,*beta2] # Faster decay for estimates of gradient and gradient squared
+}
+gradient_clip_val: 1.0
+GPU_DEVICE: 0
+plot_epoch_callback: 500
+validation_size: 0.2
+lyapunov_penalty: &lyapunov_penalty True
+swa: 250
+n_epochs_pretrain_latents: &n_epochs_pretrain_latents 5 #10000
+#Following parameters are zipped , NOTE: add in itertools cycle if lists are different lengths
+scale_kl: [1.0]
+scale_l1: [0.1]
+scale_spectral: [0.0]
+scale_lyapunov: [1.0]
+
+# MODEL ####################
+x_distribution: "Multinomial"
+x_distribution_kwargs: {}
+model_T: 1.0
+learn_T: False
+use_latents: make_counts
+
+# RESULTS ####################
+name_prefix: ["LATENT_SYNTHETIC_optim",*optimizer,"_b1_",*beta1,"_b2_",*beta2,"_pretrain_epochs",*n_epochs_pretrain_latents,"synthetic_T",*synthetic_T,"_GRAD-CLIP_SIM:",*intervention_type_simulation,"INF:",*intervention_type_inference,"-slow_lr_",*graph_type,"_",*edge_assignment,"_",*use_encoder,"_",*batch_size,"_",*lyapunov_penalty]
+SAVE_PLOT: True
+CHECKPOINTING: False
+VERBOSE_CHECKPOINTING: False
+OVERWRITE: True
+check_val_every_n_epoch: 1
+log_every_n_steps: 1
