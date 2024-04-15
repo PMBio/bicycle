@@ -1,9 +1,9 @@
 #Config file for run_synthetic.py
 
-# DATA GENERATION ####################
+# DATA GENERATION
 n_factors: 0
 add_covariates: False
-n_covariates:  0 # Number of covariates
+n_covariates:  0
 covariate_strength: 5.0
 correct_covariates: False
 intervention_type_simulation: &intervention_type_simulation "Cas9"
@@ -31,12 +31,12 @@ make_counts: True
 synthetic_T : &synthetic_T 1.0
 library_size_range_factors: [10, 100]
 
-# TRAINING ####################
+# TRAINING
 lr: 1.0e-3 #3e-4
 batch_size: &batch_size 10_000
 USE_INITS: False
 use_encoder: &use_encoder False
-n_epochs: 5 #51000
+n_epochs: 51000
 early_stopping: False
 early_stopping_patience: 500
 early_stopping_min_delta: 0.01
@@ -54,21 +54,21 @@ plot_epoch_callback: 500
 validation_size: 0.2
 lyapunov_penalty: &lyapunov_penalty True
 swa: 250
-n_epochs_pretrain_latents: &n_epochs_pretrain_latents 5 #10000
+n_epochs_pretrain_latents: &n_epochs_pretrain_latents 10000
 #Following parameters are zipped , NOTE: add in itertools cycle if lists are different lengths
 scale_kl: [1.0]
 scale_l1: [0.1]
 scale_spectral: [0.0]
 scale_lyapunov: [1.0]
 
-# MODEL ####################
+# MODEL
 x_distribution: "Multinomial"
 x_distribution_kwargs: {}
 model_T: 1.0
 learn_T: False
 use_latents: make_counts
 
-# RESULTS ####################
+# RESULTS
 name_prefix: ["LATENT_SYNTHETIC_optim",*optimizer,"_b1_",*beta1,"_b2_",*beta2,"_pretrain_epochs",*n_epochs_pretrain_latents,"synthetic_T",*synthetic_T,"_GRAD-CLIP_SIM:",*intervention_type_simulation,"INF:",*intervention_type_inference,"-slow_lr_",*graph_type,"_",*edge_assignment,"_",*use_encoder,"_",*batch_size,"_",*lyapunov_penalty]
 SAVE_PLOT: True
 CHECKPOINTING: False
