@@ -22,18 +22,18 @@ class MyLoggerCallback(pl.Callback):
             "n_steps": trainer.global_step,
             "early_stopping": trainer.model.early_stopping
         }
-        if trainer.model.early_stopping:
-            training_stats = training_stats | {
-                "early_stopping_min_delta": trainer.model.earlystopper.min_delta,
-                "early_stopping_patience": trainer.model.earlystopper.patience,
-                "early_stopping_p_mode": trainer.model.earlystopper.percentage,
-            }
-        else:
-            training_stats = training_stats | {
-                "early_stopping_min_delta": None,
-                "early_stopping_patience": None,
-                "early_stopping_p_mode": None,
-            }
+        # if trainer.model.early_stopping:
+        #     training_stats = training_stats | {
+        #         "early_stopping_min_delta": trainer.model.earlystopper.min_delta,
+        #         "early_stopping_patience": trainer.model.earlystopper.patience,
+        #         "early_stopping_p_mode": trainer.model.earlystopper.percentage,
+        #     }
+        # else:
+        #     training_stats = training_stats | {
+        #         "early_stopping_min_delta": None,
+        #         "early_stopping_patience": None,
+        #         "early_stopping_p_mode": None,
+        #     }
         # Save to yaml
         filepath = Path(self.dirpath) / "report.yaml"
         print(f"Saving training stats to {filepath}...")

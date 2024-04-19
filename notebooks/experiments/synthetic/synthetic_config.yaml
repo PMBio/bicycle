@@ -37,11 +37,6 @@ batch_size: &batch_size 10_000
 USE_INITS: False
 use_encoder: &use_encoder False
 n_epochs: 51000
-early_stopping: False
-early_stopping_patience: 500
-early_stopping_min_delta: 0.01
-# Maybe this helps to stop the loss from growing late during training (see current version
-# of Plot_Diagnostics.ipynb)
 optimizer: &optimizer "adam" #"rmsprop" #"adam"
 beta1: &beta1 0.5
 beta2: &beta2 0.9
@@ -60,6 +55,16 @@ scale_kl: [1.0]
 scale_l1: [0.1]
 scale_spectral: [0.0]
 scale_lyapunov: [1.0]
+min_epochs_pretrain_latents: 1500
+min_epochs_train: 1500
+early_stopping:
+    mode: min
+    patience: 10
+    threshold_mode: rel #or 'abs'
+    min_delta: 0.0001
+    verbose: True
+    # Maybe this helps to stop the loss from growing late during training (see current version
+    # of Plot_Diagnostics.ipynb)
 
 # MODEL
 x_distribution: "Multinomial"

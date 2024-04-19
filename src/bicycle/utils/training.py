@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import random
 import os
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from typing import Optional, Tuple
 
 
 # from: https://gist.github.com/yulkang/4a597bcc5e9ccf8c7291f8ecb776382d
@@ -171,3 +173,91 @@ class EarlyStopperTorch(object):
                 self.is_better = lambda a, best: a < best - (abs(best) * min_delta / 100)
             if mode == "max":
                 self.is_better = lambda a, best: a > best + (abs(best) * min_delta / 100)
+
+
+class EarlyStopping_mod(EarlyStopping):
+    """
+    Class to manage early stopping of model training.
+    Adapted from : https://github.com/Lightning-AI/pytorch-lightning/issues/12094#issuecomment-1825914097 
+    """
+    
+    def __init__(self, threshold_mode='abs', **kwargs):
+        super().__init__(**kwargs)
+        self.threshold_mode = threshold_mode
+
+    def _evaluate_stopping_criteria(self, current: torch.Tensor) -> Tuple[bool, Optional[str]]:
+        should_stop = False
+        reason = None
+        #Catching case when self.best_score starts at Inf and the rel expression evaluates to NaN
+        if self.threshold_mode == 'rel' and torch.isinf(self.best_score):
+            eval_criteria = (self.best_score.to(current.device)
+                                            + self.min_delta * torch.abs(self.best_score.to(current.device)))
+            if torch.isnan(eval_criteria):
+                #reset this val back to Inf to allow for proper adjustment of best_score 
+                eval_criteria = torch.tensor(np.Inf) if self.mode == 'min' else -torch.tensor(np.Inf)
+        else:
+            eval_criteria = (self.best_score.to(current.device)
+                                            + self.min_delta * torch.abs(self.best_score.to(current.device)))
+
+        if self.check_finite and not torch.isfinite(current):
+            should_stop = True
+            reason = (
+                f"Monitored metric {self.monitor} = {current} is not finite."
+                f" Previous best value was {self.best_score:.3f}. Signaling Trainer to stop."
+            )
+        elif self.stopping_threshold is not None and self.monitor_op(current, self.stopping_threshold):
+            should_stop = True
+            reason = (
+                "Stopping threshold reached:"
+                f" {self.monitor} = {current} {self.order_dict[self.mode]} {self.stopping_threshold}."
+                " Signaling Trainer to stop."
+            )
+        elif self.divergence_threshold is not None and self.monitor_op(-current, -self.divergence_threshold):
+            should_stop = True
+            reason = (
+                "Divergence threshold reached:"
+                f" {self.monitor} = {current} {self.order_dict[self.mode]} {self.divergence_threshold}."
+                " Signaling Trainer to stop."
+            )
+        elif (self.threshold_mode == 'abs'
+              and self.monitor_op(current - self.min_delta, self.best_score.to(current.device))):
+            should_stop = False
+            reason = self._improvement_message(current)
+            self.best_score = current
+            self.wait_count = 0
+        elif (self.threshold_mode == 'rel'
+              and self.monitor_op(current, eval_criteria)):
+            should_stop = False
+            reason = self._improvement_message(current)
+            self.best_score = current
+            self.wait_count = 0
+        else:
+            self.wait_count += 1
+            if self.wait_count >= self.patience:
+                should_stop = True
+                reason = (
+                    f"Monitored metric {self.monitor} did not improve in the last {self.wait_count} records."
+                    f" Best score: {self.best_score:.3f}. Signaling Trainer to stop.\n"
+                    # f"min_delat: {self.min_delta}\n"
+                    # f"current: {current}\n"
+                    # f"rel val: {self.best_score.to(current.device) - self.min_delta * torch.abs(self.best_score.to(current.device))}"
+                )
+
+        return should_stop, reason
+
+    def _improvement_message(self, current: torch.Tensor) -> str:
+        """Formats a log message that informs the user about an improvement in the monitored score."""
+        if torch.isfinite(self.best_score):
+            if self.threshold_mode == 'abs':
+                msg = (
+                    f"Metric {self.monitor} improved by {abs(self.best_score - current):.3f} >="
+                    f" min_delta = {abs(self.min_delta)}. New best score: {current:.3f}"
+                )
+            else:  # self.threshold_mode == 'rel':
+                msg = (
+                    f"Metric {self.monitor} improved by {abs(self.best_score - current) / self.best_score:.3f} >="
+                    f" min_delta = {abs(self.min_delta)}. New best score: {current:.3f}"
+                ) 
+        else:
+            msg = f"Metric {self.monitor} improved. New best score: {current:.3f}"
+        return msg

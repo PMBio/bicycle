@@ -1,6 +1,6 @@
 from torch import nn
 import torch
-from bicycle.utils.training import EarlyStopperTorch, lyapunov_direct
+from bicycle.utils.training import lyapunov_direct #EarlyStopperTorch, lyapunov_direct
 import torch.optim as optim
 import pytorch_lightning as pl
 from torch.distributions.kl import kl_divergence
@@ -105,9 +105,9 @@ class BICYCLE(pl.LightningModule):
         scale_lyapunov=1.0,
         scale_kl=1.0,
         early_stopping: bool = True,
-        early_stopping_min_delta: float = 0.5,
-        early_stopping_patience: int = 100,
-        early_stopping_p_mode: bool = True,
+        # early_stopping_min_delta: float = 0.5,
+        # early_stopping_patience: int = 100,
+        # #early_stopping_p_mode: bool = True,
         x_distribution: str = None,
         x_distribution_kwargs: dict = None,
         init_tensors: dict = {},
@@ -197,13 +197,13 @@ class BICYCLE(pl.LightningModule):
         self.x_distribution = x_distribution
         self.x_distribution_kwargs = x_distribution_kwargs
 
-        if early_stopping:
-            self.earlystopper = EarlyStopperTorch(
-                mode="min",
-                patience=early_stopping_patience,
-                min_delta=early_stopping_min_delta,
-                percentage=early_stopping_p_mode,
-            )
+        # if early_stopping:
+        #     # self.earlystopper = EarlyStopperTorch(
+        #     #     mode="min",
+        #     #     patience=early_stopping_patience,
+        #     #     min_delta=early_stopping_min_delta,
+        #     #     percentage=early_stopping_p_mode,
+        #     # )
 
         self.validation_step_outputs = []
 
@@ -995,9 +995,9 @@ class BICYCLE(pl.LightningModule):
             avg_loss = torch.stack(self.validation_step_outputs).mean()
             self.log("avg_valid_loss", avg_loss)
 
-            if self.earlystopper.step(avg_loss):
-                print(f"Earlystopping due to convergence at step {self.current_epoch}")
-                self.trainer.should_stop = True
+            # if self.earlystopper.step(avg_loss):
+            #     print(f"Earlystopping due to convergence at step {self.current_epoch}")
+            #     self.trainer.should_stop = True
 
             self.validation_step_outputs.clear()
 

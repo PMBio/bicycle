@@ -19,6 +19,7 @@ from bicycle.utils.data import (
 )
 from bicycle.utils.general import get_full_name
 from bicycle.utils.plotting import plot_training_results
+from bicycle.utils.training import EarlyStopping_mod
 from pytorch_lightning.callbacks import RichProgressBar, StochasticWeightAveraging
 from bicycle.callbacks import ModelCheckpoint, GenerateCallback, MyLoggerCallback, CustomModelCheckpoint
 import numpy as np
@@ -241,10 +242,11 @@ def run_synthetic_experiment(
             scale_lyapunov=scale_lyapunov,
             scale_spectral=scale_spectral,
             scale_kl=scale_kl,
-            early_stopping=config["early_stopping"],
-            early_stopping_min_delta=config["early_stopping_min_delta"],
-            early_stopping_patience=config["early_stopping_patience"],
-            early_stopping_p_mode=True,
+            early_stopping=True if "early_stopping" in config else False,
+            # early_stopping_min_delta=config["early_stopping_min_delta"],
+            # early_stopping_patience=config["early_stopping_patience"],
+            # early_stopping_threshold_mode=config["early_stopping_threshold_mode"],
+            #early_stopping_p_mode=True, # relative percent change
             x_distribution=config["x_distribution"],
             x_distribution_kwargs=config["x_distribution_kwargs"],
             mask=mask,
@@ -291,7 +293,15 @@ def run_synthetic_experiment(
             )
             callbacks.append(MyLoggerCallback(dirpath=os.path.join(MODEL_PATH, file_dir)))
 
+        if "early_stopping" in config:
+            callbacks.append(
+                EarlyStopping_mod(
+                    monitor="avg_valid_loss",
+                    **config["early_stopping"])
+            )
+
         trainer = pl.Trainer(
+            min_epochs=config["min_epochs_train"],
             max_epochs=config["n_epochs"],
             accelerator="gpu",  # if str(device).startswith("cuda") else "cpu",
             logger=loggers,
@@ -345,8 +355,16 @@ def run_synthetic_experiment(
                 pretrain_callbacks.append(StochasticWeightAveraging(0.01, swa_epoch_start=config["swa"]))
 
             pretrain_callbacks.append(MyLoggerCallback(dirpath=os.path.join(MODEL_PATH, file_dir)))
+
+            if "early_stopping" in config:
+                pretrain_callbacks.append(
+                    EarlyStopping_mod(
+                        monitor="avg_valid_loss",
+                        **config["early_stopping"])
+            )
             
             pretrainer = pl.Trainer(
+                min_epochs=config["min_epochs_pretrain_latents"],
                 max_epochs=config["n_epochs_pretrain_latents"],
                 accelerator="gpu",  # if str(device).startswith("cuda") else "cpu",
                 logger=loggers,
