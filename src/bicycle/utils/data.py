@@ -263,7 +263,7 @@ def create_data(
             plt.colorbar()
             plt.show()
 
-        return (gt_dyn, intervened_variables, samples, gt_interv, sim_regime, beta)
+        return (gt_dyn, intervened_variables, samples, gt_interv, sim_regime, beta, omegas)
 
     elif sem == "linear":
         beta = np.array(beta)
