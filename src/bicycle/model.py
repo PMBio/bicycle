@@ -43,30 +43,32 @@ class Encoder(nn.Module):
 class Omega_Iterative(pl.LightningModule):
     def __init__(
         self,
-        alpha,
-        beta,
-        sigma,
+        alphas,
+        betas,
+        B,
+        sigmas,
         lr = 1e-2,
         sigma_min = 1e-3,
         device = "cpu"):
         
         super().__init__()
         super().to(device)
+
+        self.n_regimes = alphas.shape[0]
         
         print('setting device to:',device)
         
-        self.alpha = alpha.detach().to(device)
-        self.beta = beta.detach().to(device)
-        self.sigma = sigma.detach().to(device)
-        self.n_genes = alpha.shape[0]
+        self.alphas = alphas.detach().to(device)
+        self.betas = betas.detach().to(device)
+        self.B = B.detach().to(device)
+        self.sigmas = sigmas.detach().to(device)
+        self.n_genes = alphas.shape[-1]
+        
         self.lr = lr
+        
         self.sigma_min = sigma_min
         
-        self.omega = torch.nn.Parameter( 0.1 * torch.randn((self.n_genes, self.n_genes), device = device) )
-        
-        self.B = torch.eye(self.n_genes, device=self.device) - (
-            1.0 - torch.eye(self.n_genes, device=self.device)
-        ) * beta.transpose(0, 1)
+        self.omegas = torch.nn.Parameter( 0.1 * torch.randn((self.n_regimes, self.n_genes, self.n_genes), device = device) )
 
     def configure_optimizers(self):
         return optim.Adam(self.parameters(), lr=self.lr)        
@@ -78,13 +80,14 @@ class Omega_Iterative(pl.LightningModule):
             )        
         
         return loss_lyapunov
-        
+
     def lyapunov_lhs(self):
-        mat = self.B.detach() @ self.omega
-        return mat + mat.transpose(0, 1)
+
+        mat = self.B.detach() @ self.omegas
+        return mat + mat.transpose(1, 2)
 
     def lyapunov_rhs(self):
-        return self.sigma.detach() @ self.sigma.detach().transpose(0, 1)
+        return torch.bmm(self.sigmas.detach(), self.sigmas.detach().transpose(1, 2))
     
 
 class BICYCLE(pl.LightningModule):
@@ -893,10 +896,48 @@ class BICYCLE(pl.LightningModule):
             
         alphas, betas, B, sigmas = self.get_updated_states()
         sim_regime = torch.tensor(np.asarray(regimes), device = alphas.device).long()
+
+        print("alphas.shape:'",alphas.shape)
         
         x_bar = self.get_x_bar(B, alphas, sim_regime)
         
         return x_bar
+
+    def predict_covs(self, regimes = [], max_epochs = 1000):
+        
+        if len(regimes) < 1 or np.asarray(regimes).max() >= self.n_contexts:
+            print('List of regimes to predict not valid... skipping. List:', regimes)
+            
+        alphas, betas, B, sigmas = self.get_updated_states()
+        sim_regimes = torch.tensor(np.asarray(regimes), device = alphas.device).long()
+        
+        alphas = alphas[sim_regimes]
+        betas = betas[sim_regimes]
+        B = B[sim_regimes]
+        sigmas = sigmas[sim_regimes]
+        
+        omega_model = Omega_Iterative(alphas, betas, B, sigmas, device = alphas.device)
+        
+        # Empty dataloader, just so PL won't complain
+        dataset = TensorDataset(torch.zeros((1,1)))
+        dataloader = DataLoader(dataset)
+        
+        trainer = pl.Trainer(
+            max_epochs=max_epochs,
+            accelerator= 'cuda' if str(alphas.device).startswith('cuda') else 'cpu',
+            num_sanity_val_steps=0
+        )
+
+        print('PREDICT_COV, OMEGAS.DEVICE:',omega_model.omegas.device)
+        
+        start_time = time.time()    
+        trainer.fit(omega_model, dataloader)    
+        end_time = time.time()
+        print(f"Training took {end_time - start_time:.2f} seconds")
+
+        print(omega_model.omegas)
+        
+        return omega_model.omegas.detach()
     
     def predict_mean_percentages(self, batch):
         
