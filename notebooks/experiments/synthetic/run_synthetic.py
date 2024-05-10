@@ -78,10 +78,10 @@ library_size_range = [10*n_genes, 100*n_genes]
 
 # TRAINING
 lr = 1e-3 #3e-4
-batch_size = 10_000
+batch_size = 1_000
 USE_INITS = False
 use_encoder = False
-n_epochs = 51000
+n_epochs = 2000
 early_stopping = False
 early_stopping_patience = 500
 early_stopping_min_delta = 0.01
@@ -97,7 +97,7 @@ plot_epoch_callback = 500
 validation_size = 0.2
 lyapunov_penalty = True
 swa = 250
-n_epochs_pretrain_latents = 10000
+n_epochs_pretrain_latents = 1000
 
 LOGO = []
 train_gene_ko = [str(x) for x in set(range(0, n_genes)) - set(LOGO)]  # We start counting at 0
@@ -117,7 +117,7 @@ use_latents = make_counts
 # RESULTS
 name_prefix = f"LATENT_SYNTHETIC_optim{optimizer}_b1_0.5_b2_0.9_pretrain_epochs{n_epochs_pretrain_latents}synthetic_T{synthetic_T}_GRAD-CLIP_SIM:{intervention_type_simulation}INF:{intervention_type_inference}-slow_lr_{graph_type}_{edge_assignment}_{use_encoder}_{batch_size}_{lyapunov_penalty}"
 SAVE_PLOT = True
-CHECKPOINTING = False
+CHECKPOINTING = True
 VERBOSE_CHECKPOINTING = False
 OVERWRITE = True
 # REST
@@ -234,7 +234,7 @@ if covariates is not None and correct_covariates:
     covariates = covariates.to(device)
 
 for scale_kl in [1.0]:  # 1
-    for scale_l1 in [0.1]:
+    for scale_l1 in [0.5]:
         for scale_spectral in [0.0]: # 1.0
             for scale_lyapunov in [1.0]: # 0.1
                 file_dir = get_full_name(
@@ -346,9 +346,9 @@ for scale_kl in [1.0]:  # 1
                     callbacks.append(
                         CustomModelCheckpoint(
                             dirpath=os.path.join(MODEL_PATH, file_dir),
-                            filename="{epoch}",
+                            filename="{epoch}-{valid_loss:.2f}",
                             save_last=True,
-                            save_top_k=1,
+                            save_top_k=3,
                             verbose=VERBOSE_CHECKPOINTING,
                             monitor="valid_loss",
                             mode="min",
