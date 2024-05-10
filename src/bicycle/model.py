@@ -898,6 +898,35 @@ class BICYCLE(pl.LightningModule):
         
         return x_bar
     
+    def predict_mean_percentages(self, batch):
+        
+        samples, sim_regime, sample_idx, data_category = batch
+        
+        regimes = list(np.unique(sim_regime))
+        
+        #print('Using regimes:')
+        #print(regimes)
+        
+        #print('Predicting means:')
+        
+        x_bar = self.predict_means(regimes)
+        
+        indices = [regimes.index(r) for r in sim_regime]
+        
+        #print('sim_regime:', sim_regime)
+        #print('indices:', indices)
+        #print('regimes:', regimes)
+        
+        
+        z_means = x_bar[indices]
+        
+        #print('z_means.shape:')
+        #print(z_means.shape)
+                
+        ps = torch.softmax(z_means / self.T, dim=-1)
+        
+        return ps
+    
     def predict_perturbation(self, target_idx, target_mu = [], target_std = [], max_epochs = 1000, perturbation_type = [], perturbation_like = []):
    
         self.gt_interv.to(self.device)
