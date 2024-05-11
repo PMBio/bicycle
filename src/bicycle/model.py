@@ -48,13 +48,18 @@ class Omega_Iterative(pl.LightningModule):
         B,
         sigmas,
         lr = 1e-2,
-        sigma_min = 1e-3,
-        device = "cpu"):
+        sigma_min = 1e-3,        
+        device = "cpu",
+        rank_w_cov_factor = 0):
         
         super().__init__()
         super().to(device)
 
+        self.pos = nn.Softplus()
+        
         self.n_regimes = alphas.shape[0]
+
+        self.sigma_min = sigma_min
         
         print('setting device to:',device)
         
@@ -63,13 +68,31 @@ class Omega_Iterative(pl.LightningModule):
         self.B = B.detach().to(device)
         self.sigmas = sigmas.detach().to(device)
         self.n_genes = alphas.shape[-1]
+
+        if rank_w_cov_factor > 0 and rank_w_cov_factor <= self.n_genes:
+            self.rank_w_cov_factor = rank_w_cov_factor
+        else:
+            self.rank_w_cov_factor = self.n_genes
         
         self.lr = lr
         
         self.sigma_min = sigma_min
         
-        self.omegas = torch.nn.Parameter( 0.1 * torch.randn((self.n_regimes, self.n_genes, self.n_genes), device = device) )
-
+        self.w_cov_diag = torch.nn.Parameter(
+                        torch.exp(
+                            0.1
+                            * torch.rand(
+                                (
+                                    self.n_regimes,
+                                    self.n_genes,
+                                )
+                            )
+                        )
+                    )
+        self.w_cov_factor = torch.nn.Parameter(
+            0.1 * torch.randn((self.n_regimes, self.n_genes, self.rank_w_cov_factor))
+        )
+        
     def configure_optimizers(self):
         return optim.Adam(self.parameters(), lr=self.lr)        
         
@@ -78,16 +101,20 @@ class Omega_Iterative(pl.LightningModule):
         loss_lyapunov = torch.sum(torch.square(self.lyapunov_lhs() - self.lyapunov_rhs())) / (
                 self.n_genes**2
             )        
+
+        print("\rLyapunov loss: %.2f" % loss_lyapunov)
         
         return loss_lyapunov
 
     def lyapunov_lhs(self):
-
-        mat = self.B.detach() @ self.omegas
+        mat = self.B.detach() @ (
+            torch.diag_embed(self.pos(self.w_cov_diag) + self.sigma_min)
+            + self.w_cov_factor @ self.w_cov_factor.transpose(1, 2)
+        )
         return mat + mat.transpose(1, 2)
 
     def lyapunov_rhs(self):
-        return torch.bmm(self.sigmas.detach(), self.sigmas.detach().transpose(1, 2))
+        return torch.bmm(self.sigmas.detach(), self.sigmas.transpose(1, 2).detach())
     
 
 class BICYCLE(pl.LightningModule):
@@ -928,16 +955,20 @@ class BICYCLE(pl.LightningModule):
             num_sanity_val_steps=0
         )
 
-        print('PREDICT_COV, OMEGAS.DEVICE:',omega_model.omegas.device)
+        #print('PREDICT_COV, OMEGAS.DEVICE:',omega_model.omegas.device)
         
         start_time = time.time()    
         trainer.fit(omega_model, dataloader)    
         end_time = time.time()
         print(f"Training took {end_time - start_time:.2f} seconds")
 
-        print(omega_model.omegas)
+        #print(omega_model.omegas)
+
+
+        omegas = ( torch.diag_embed(omega_model.pos(omega_model.w_cov_diag) + omega_model.sigma_min)
+                   + omega_model.w_cov_factor @ omega_model.w_cov_factor.transpose(1, 2) )
         
-        return omega_model.omegas.detach()
+        return omegas.detach()
     
     def predict_mean_percentages(self, batch):
         
@@ -951,6 +982,7 @@ class BICYCLE(pl.LightningModule):
         #print('Predicting means:')
         
         x_bar = self.predict_means(regimes)
+        omegas = self.predict_covs(regimes)
         
         indices = [regimes.index(r) for r in sim_regime]
         
