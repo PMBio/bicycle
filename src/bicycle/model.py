@@ -102,7 +102,7 @@ class Omega_Iterative(pl.LightningModule):
                 self.n_genes**2
             )        
 
-        print("\rLyapunov loss: %.2f" % loss_lyapunov)
+        #print("\rLyapunov loss: %.2f" % loss_lyapunov)
         
         return loss_lyapunov
 
@@ -930,7 +930,7 @@ class BICYCLE(pl.LightningModule):
         
         return x_bar
 
-    def predict_covs(self, regimes = [], max_epochs = 1000):
+    def predict_covs(self, regimes = [], max_epochs = 10000):
         
         if len(regimes) < 1 or np.asarray(regimes).max() >= self.n_contexts:
             print('List of regimes to predict not valid... skipping. List:', regimes)
@@ -967,6 +967,8 @@ class BICYCLE(pl.LightningModule):
 
         omegas = ( torch.diag_embed(omega_model.pos(omega_model.w_cov_diag) + omega_model.sigma_min)
                    + omega_model.w_cov_factor @ omega_model.w_cov_factor.transpose(1, 2) )
+
+        self.omega_model = omega_model
         
         return omegas.detach()
     
