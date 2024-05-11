@@ -54,7 +54,7 @@ PLOT_PATH.mkdir(parents=True, exist_ok=True)
 
 # DATA GENERATION
 n_genes = 10  # Number of modelled genes
-rank_w_cov_factor = n_genes  # Same as dictys: #min(TFs, N_GENES-1)
+rank_w_cov_factor = n_genes - 1  # Same as dictys: #min(TFs, N_GENES-1)
 graph_type = "erdos-renyi"
 edge_assignment = "random-uniform"
 sem = "linear-ou"
@@ -135,7 +135,7 @@ if n_factors > 0:
 #
 # Create synthetic data
 #
-gt_dyn, intervened_variables, samples, gt_interv, sim_regime, beta = create_data(
+gt_dyn, intervened_variables, samples, gt_interv, sim_regime, beta, _ = create_data(
     n_genes,
     n_samples_control=n_samples_control,
     n_samples_per_perturbation=n_samples_per_perturbation,
