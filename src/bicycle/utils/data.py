@@ -192,10 +192,12 @@ def create_data(
         # print(np.linalg.cholesky(omegas[k]))
         # print(sorted([np.round(x, 4) for x in np.linalg.eigvals(omegas[k])]))
 
-        x_bar = torch.bmm(torch.linalg.inv(B_broadcasted), alphas_broadcasted[:, :, None]).squeeze()
+        x_bar = torch.bmm(torch.linalg.inv(B), alphas[:, :, None]).squeeze()
 
+        x_bar_broadcasted = x_bar[sim_regime]
+        
         samples = (
-            torch.distributions.MultivariateNormal(x_bar, covariance_matrix=omegas_broadcasted)
+            torch.distributions.MultivariateNormal(x_bar_broadcasted, covariance_matrix=omegas_broadcasted)
             .sample()
             .detach()
         )
@@ -263,7 +265,7 @@ def create_data(
             plt.colorbar()
             plt.show()
 
-        return (gt_dyn, intervened_variables, samples, gt_interv, sim_regime, beta, omegas)
+        return (gt_dyn, intervened_variables, samples, gt_interv, sim_regime, beta, x_bar, omegas)
 
     elif sem == "linear":
         beta = np.array(beta)
