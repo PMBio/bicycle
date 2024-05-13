@@ -135,7 +135,7 @@ if n_factors > 0:
 #
 # Create synthetic data
 #
-gt_dyn, intervened_variables, samples, gt_interv, sim_regime, beta, _ = create_data(
+gt_dyn, intervened_variables, samples, gt_interv, sim_regime, beta, _, _ = create_data(
     n_genes,
     n_samples_control=n_samples_control,
     n_samples_per_perturbation=n_samples_per_perturbation,
