@@ -27,10 +27,10 @@ from pytorch_lightning.tuner.tuning import Tuner
 
 n_factors = 0
 
-add_covariates = False
+add_covariates = True
 n_covariates =  2 # Number of covariates
 scale_covariates = 1.0
-correct_covariates = False
+correct_covariates = True
 
 intervention_type_simulation = "Cas9"
 intervention_type_inference = "Cas9"
@@ -115,7 +115,7 @@ learn_T = False
 use_latents = make_counts
 
 # RESULTS
-name_prefix = f"LATENT_SYNTHETIC_optim{optimizer}_b1_0.5_b2_0.9_pretrain_epochs{n_epochs_pretrain_latents}synthetic_T{synthetic_T}_GRAD-CLIP_SIM:{intervention_type_simulation}INF:{intervention_type_inference}-slow_lr_{graph_type}_{edge_assignment}_{use_encoder}_{batch_size}_{lyapunov_penalty}"
+name_prefix = f"CORRECTED_COVARIATES_LATENT_SYNTHETIC_optim{optimizer}_b1_0.5_b2_0.9_pretrain_epochs{n_epochs_pretrain_latents}synthetic_T{synthetic_T}_GRAD-CLIP_SIM:{intervention_type_simulation}INF:{intervention_type_inference}-slow_lr_{graph_type}_{edge_assignment}_{use_encoder}_{batch_size}_{lyapunov_penalty}"
 SAVE_PLOT = True
 CHECKPOINTING = True
 VERBOSE_CHECKPOINTING = False
