@@ -1,6 +1,6 @@
 # Bicycle
 
-Bicycle is a method to infer causal graphs with cyclic structures from observational and interventional data. Bicycle models the true (free of technical/measurement noise) causal relationships using latent variables described by the steady-state distribution of a dynamical system with unknown governing equations. A key innovation of Bicycle is that its stochastic differential equations (SDEs) are parameterized in a hierarchical fashion for each interventional condition. That is, the parameters of the SDE across conditions are identical to those of an unperturbed system, except for those genes that govern the evolution of direct interventional target variables. This approach can be interpreted as an instance of the independent causal mechanisms principle (c.f., Scholkopf et al. (2021)). The model can unravel causal relationships and predict the effect of unknown interventions while providing a directly interpretable representation of the system.
+[Bicycle](https://proceedings.mlr.press/v236/rohbeck24a/rohbeck24a.pdf) is a method to infer causal graphs with cyclic structures from observational and interventional data. Bicycle models the true (free of technical/measurement noise) causal relationships using latent variables described by the steady-state distribution of a dynamical system with unknown governing equations. A key innovation of Bicycle is that its stochastic differential equations (SDEs) are parameterized in a hierarchical fashion for each interventional condition. That is, the parameters of the SDE across conditions are identical to those of an unperturbed system, except for those genes that govern the evolution of direct interventional target variables. This approach can be interpreted as an instance of the independent causal mechanisms principle (c.f., Scholkopf et al. (2021)). The model can unravel causal relationships and predict the effect of unknown interventions while providing a directly interpretable representation of the system.
 
 <center><img src="figure_one_v2.svg" width="800px"></center>
 
@@ -35,7 +35,7 @@ TBD
 TBD
 
 ## Citation
-Please consider citing our work, if our paper/code is relevant for your work:
+Please consider citing our work, if our [paper](https://proceedings.mlr.press/v236/rohbeck24a/rohbeck24a.pdf)/code is relevant for your work:
 ```bibtex
 @inproceedings{rohbeck2024causal,
   title={Bicycle: Intervention-Based Causal Discovery with Cycles},
