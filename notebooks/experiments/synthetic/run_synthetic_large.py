@@ -3,29 +3,35 @@ import warnings
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-import time
 import os
-from pathlib import Path
+import time
 from os import environ
+from pathlib import Path
+
+import numpy as np
 import pytorch_lightning as pl
 import torch
+import yaml
+from bicycle.callbacks import (
+    CustomModelCheckpoint,
+    GenerateCallback,
+    ModelCheckpoint,
+    MyLoggerCallback,
+)
 from bicycle.dictlogger import DictLogger
 from bicycle.model import BICYCLE
 from bicycle.utils.data import (
+    compute_inits,
     create_data,
     create_loaders,
     get_diagonal_mask,
-    compute_inits,
 )
 from bicycle.utils.general import get_full_name
 from bicycle.utils.plotting import plot_training_results
 from pytorch_lightning.callbacks import RichProgressBar, StochasticWeightAveraging
-from bicycle.callbacks import ModelCheckpoint, GenerateCallback, MyLoggerCallback, CustomModelCheckpoint
-import numpy as np
-import yaml
 
 add_covariates = False
-n_covariates =  1 # Number of covariates
+n_covariates = 1  # Number of covariates
 covariate_strength = 5.0
 correct_covariates = False
 
@@ -70,7 +76,7 @@ make_counts = False
 make_contractive = True
 # LEARNING
 lr = 1e-3
-batch_size = 1024#4096
+batch_size = 1024  # 4096
 USE_INITS = False
 use_encoder = False
 n_epochs = 51000
@@ -99,7 +105,9 @@ GPU_DEVICE = 0
 plot_epoch_callback = 1000
 use_latents = False
 # RESULTS
-name_prefix = f"SCALE-NOFACTORS-BENCHMARK_{graph_type}_{edge_assignment}_{use_encoder}_{batch_size}_{lyapunov_penalty}"
+name_prefix = (
+    f"SCALE-NOFACTORS-BENCHMARK_{graph_type}_{edge_assignment}_{use_encoder}_{batch_size}_{lyapunov_penalty}"
+)
 SAVE_PLOT = True
 CHECKPOINTING = False
 VERBOSE_CHECKPOINTING = False
@@ -134,7 +142,7 @@ gt_dyn, intervened_variables, samples, gt_interv, sim_regime, beta = create_data
     **graph_kwargs,
 )
 
-print("eigvals B_true:",torch.max(torch.real(torch.linalg.eigvals(beta - torch.eye(n_genes)))))
+print("eigvals B_true:", torch.max(torch.real(torch.linalg.eigvals(beta - torch.eye(n_genes)))))
 
 #
 # Artificially increase size of data:
@@ -148,29 +156,33 @@ if n_uncorrelated_vars > 0:
     print("Padding samples with %d extra random dimensions!" % (n_uncorrelated_vars))
     print("(Just to benchmark scaling behavior.)")
 
-    samples_new = 0.1*torch.randn((samples.shape[0],samples.shape[1] + n_uncorrelated_vars), device = samples.device)
-    samples_new[:,:samples.shape[1]] = samples
-    
+    samples_new = 0.1 * torch.randn(
+        (samples.shape[0], samples.shape[1] + n_uncorrelated_vars), device=samples.device
+    )
+    samples_new[:, : samples.shape[1]] = samples
+
     for k in range(gt_interv.shape[1]):
-        print(gt_interv[:,k])
-        
-    gt_interv_new = torch.zeros((gt_interv.shape[0] + n_uncorrelated_vars, gt_interv.shape[1]), device = gt_interv.device)
-    gt_interv_new[:gt_interv.shape[0],:] = gt_interv
+        print(gt_interv[:, k])
+
+    gt_interv_new = torch.zeros(
+        (gt_interv.shape[0] + n_uncorrelated_vars, gt_interv.shape[1]), device=gt_interv.device
+    )
+    gt_interv_new[: gt_interv.shape[0], :] = gt_interv
 
     samples = samples_new
     gt_interv = gt_interv_new
     n_genes = n_genes + n_uncorrelated_vars
-    
+
     rank_w_cov_factor = n_genes
 
 if add_covariates:
-    
-    print('ADDING COVARIATES')
+
+    print("ADDING COVARIATES")
     # Create some artificial covariates and add them to the simulated data
     covariates = torch.randn((n_samples_total, n_covariates)).to(device)
     covariate_weights = torch.zeros((n_genes, n_covariates)).to(device)
-    
-    '''covariate_weights[0,0] = covariate_strength
+
+    """covariate_weights[0,0] = covariate_strength
     covariate_weights[1,0] = covariate_strength
     
     covariate_weights[2,1] = -covariate_strength
@@ -178,19 +190,19 @@ if add_covariates:
     
     covariate_weights[4,2] = covariate_strength
     covariate_weights[5,2] = covariate_strength
-    covariate_weights[6,2] = -covariate_strength'''
-    
-    covariate_weights[:,0] = covariate_strength
-    
-    print('covariates.shape',covariates.shape)
-    print('covariate_weights',covariate_weights)
-    
-    print('samples before:',samples[:2])
-    
-    samples = samples + torch.mm(covariates, covariate_weights.transpose(0,1)) 
-    
-    print('samples after:',samples[:2])
-    
+    covariate_weights[6,2] = -covariate_strength"""
+
+    covariate_weights[:, 0] = covariate_strength
+
+    print("covariates.shape", covariates.shape)
+    print("covariate_weights", covariate_weights)
+
+    print("samples before:", samples[:2])
+
+    samples = samples + torch.mm(covariates, covariate_weights.transpose(0, 1))
+
+    print("samples after:", samples[:2])
+
     train_loader, validation_loader, test_loader, covariates = create_loaders(
         samples,
         sim_regime,
@@ -199,25 +211,19 @@ if add_covariates:
         SEED,
         train_gene_ko,
         test_gene_ko,
-        covariates = covariates
+        covariates=covariates,
     )
-    
+
     if correct_covariates == False:
-        print('NOT CORRECTING FOR COVARIATES!')
+        print("NOT CORRECTING FOR COVARIATES!")
         covariates = None
-    
+
 else:
-    
+
     train_loader, validation_loader, test_loader = create_loaders(
-        samples,
-        sim_regime,
-        validation_size,
-        batch_size,
-        SEED,
-        train_gene_ko,
-        test_gene_ko
+        samples, sim_regime, validation_size, batch_size, SEED, train_gene_ko, test_gene_ko
     )
-    
+
     covariates = None
 
 if USE_INITS:
@@ -239,8 +245,8 @@ if covariates is not None and correct_covariates:
 
 for scale_kl in [1.0]:  # 1
     for scale_l1 in [10.0]:
-        for scale_spectral in [0.0]: # 1.0
-            for scale_lyapunov in [1.0]: # 0.1
+        for scale_spectral in [0.0]:  # 1.0
+            for scale_lyapunov in [1.0]:  # 0.1
                 file_dir = get_full_name(
                     name_prefix,
                     len(LOGO),
@@ -311,7 +317,7 @@ for scale_kl in [1.0]:  # 1
                     test_gene_ko=test_gene_ko,
                     use_latents=use_latents,
                     covariates=covariates,
-                    n_factors = n_factors
+                    n_factors=n_factors,
                 )
                 model.to(device)
 
@@ -360,7 +366,7 @@ for scale_kl in [1.0]:  # 1
                     gradient_clip_val=gradient_clip_val,
                     default_root_dir=str(MODEL_PATH),
                     gradient_clip_algorithm="value",
-                    deterministic=False, #"warn",
+                    deterministic=False,  # "warn",
                 )
 
                 # try:

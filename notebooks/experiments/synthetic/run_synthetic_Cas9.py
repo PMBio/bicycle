@@ -3,32 +3,38 @@ import warnings
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-import time
 import os
-from pathlib import Path
+import time
 from os import environ
+from pathlib import Path
+
+import numpy as np
 import pytorch_lightning as pl
 import torch
+import yaml
+from bicycle.callbacks import (
+    CustomModelCheckpoint,
+    GenerateCallback,
+    ModelCheckpoint,
+    MyLoggerCallback,
+)
 from bicycle.dictlogger import DictLogger
 from bicycle.model import BICYCLE
 from bicycle.utils.data import (
+    compute_inits,
     create_data,
     create_loaders,
     get_diagonal_mask,
-    compute_inits,
 )
 from bicycle.utils.general import get_full_name
 from bicycle.utils.plotting import plot_training_results
 from pytorch_lightning.callbacks import RichProgressBar, StochasticWeightAveraging
-from bicycle.callbacks import ModelCheckpoint, GenerateCallback, MyLoggerCallback, CustomModelCheckpoint
-import numpy as np
-import yaml
 from pytorch_lightning.tuner.tuning import Tuner
 
 n_factors = 0
 
 add_covariates = False
-n_covariates =  0 # Number of covariates
+n_covariates = 0  # Number of covariates
 covariate_strength = 5.0
 correct_covariates = False
 
@@ -136,20 +142,20 @@ gt_dyn, intervened_variables, samples, gt_interv, sim_regime, beta = create_data
     edge_assignment=edge_assignment,
     sem=sem,
     make_contractive=make_contractive,
-    intervention_type = intervention_type_simulation,
+    intervention_type=intervention_type_simulation,
     **graph_kwargs,
 )
 
-print("eigvals B:",torch.max(torch.real(torch.linalg.eigvals(beta - torch.eye(n_genes)))))
+print("eigvals B:", torch.max(torch.real(torch.linalg.eigvals(beta - torch.eye(n_genes)))))
 
 if add_covariates:
-    
-    print('ADDING COVARIATES')
+
+    print("ADDING COVARIATES")
     # Create some artificial covariates and add them to the simulated data
     covariates = torch.randn((n_samples_total, n_covariates)).to(device)
     covariate_weights = torch.zeros((n_genes, n_covariates)).to(device)
-    
-    '''covariate_weights[0,0] = covariate_strength
+
+    """covariate_weights[0,0] = covariate_strength
     covariate_weights[1,0] = covariate_strength
     
     covariate_weights[2,1] = -covariate_strength
@@ -157,19 +163,19 @@ if add_covariates:
     
     covariate_weights[4,2] = covariate_strength
     covariate_weights[5,2] = covariate_strength
-    covariate_weights[6,2] = -covariate_strength'''
-    
-    covariate_weights[:,0] = covariate_strength
-    
-    print('covariates.shape',covariates.shape)
-    print('covariate_weights',covariate_weights)
-    
-    print('samples before:',samples[:2])
-    
-    samples = samples + torch.mm(covariates, covariate_weights.transpose(0,1)) 
-    
-    print('samples after:',samples[:2])
-    
+    covariate_weights[6,2] = -covariate_strength"""
+
+    covariate_weights[:, 0] = covariate_strength
+
+    print("covariates.shape", covariates.shape)
+    print("covariate_weights", covariate_weights)
+
+    print("samples before:", samples[:2])
+
+    samples = samples + torch.mm(covariates, covariate_weights.transpose(0, 1))
+
+    print("samples after:", samples[:2])
+
     train_loader, validation_loader, test_loader, covariates = create_loaders(
         samples,
         sim_regime,
@@ -178,25 +184,19 @@ if add_covariates:
         SEED,
         train_gene_ko,
         test_gene_ko,
-        covariates = covariates
+        covariates=covariates,
     )
-    
+
     if correct_covariates == False:
-        print('NOT CORRECTING FOR COVARIATES!')
+        print("NOT CORRECTING FOR COVARIATES!")
         covariates = None
-    
+
 else:
-    
+
     train_loader, validation_loader, test_loader = create_loaders(
-        samples,
-        sim_regime,
-        validation_size,
-        batch_size,
-        SEED,
-        train_gene_ko,
-        test_gene_ko
+        samples, sim_regime, validation_size, batch_size, SEED, train_gene_ko, test_gene_ko
     )
-    
+
     covariates = None
 
 if USE_INITS:
@@ -218,8 +218,8 @@ if covariates is not None and correct_covariates:
 
 for scale_kl in [1.0]:  # 1
     for scale_l1 in [1.0]:
-        for scale_spectral in [0.0]: # 1.0
-            for scale_lyapunov in [1.0]: # 0.1
+        for scale_spectral in [0.0]:  # 1.0
+            for scale_lyapunov in [1.0]:  # 0.1
                 file_dir = get_full_name(
                     name_prefix,
                     len(LOGO),
@@ -290,8 +290,8 @@ for scale_kl in [1.0]:  # 1
                     test_gene_ko=test_gene_ko,
                     use_latents=use_latents,
                     covariates=covariates,
-                    n_factors = n_factors,
-                    intervention_type = intervention_type_inference
+                    n_factors=n_factors,
+                    intervention_type=intervention_type_inference,
                 )
                 model.to(device)
 
@@ -340,10 +340,10 @@ for scale_kl in [1.0]:  # 1
                     gradient_clip_val=gradient_clip_val,
                     default_root_dir=str(MODEL_PATH),
                     gradient_clip_algorithm="value",
-                    deterministic=False, #"warn",
+                    deterministic=False,  # "warn",
                 )
-                
-                '''print('Optimizing learning rates')
+
+                """print('Optimizing learning rates')
                 
                 tuner = Tuner(trainer)
 
@@ -363,7 +363,7 @@ for scale_kl in [1.0]:  # 1
                 print('Using learning rate of:',new_lr)
 
                 # update hparams of the model
-                model.hparams.lr = new_lr'''
+                model.hparams.lr = new_lr"""
 
                 # try:
                 start_time = time.time()

@@ -3,32 +3,37 @@ import warnings
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-import time
 import os
-from pathlib import Path
+import time
 from os import environ
+from pathlib import Path
+
+import numpy as np
 import pytorch_lightning as pl
 import torch
+import yaml
+from bicycle.callbacks import (
+    CustomModelCheckpoint,
+    GenerateCallback,
+    MyLoggerCallback,
+)
 from bicycle.dictlogger import DictLogger
 from bicycle.model import BICYCLE
 from bicycle.utils.data import (
+    compute_inits,
     create_data,
     create_loaders,
     get_diagonal_mask,
-    compute_inits,
 )
 from bicycle.utils.general import get_full_name
 from bicycle.utils.plotting import plot_training_results
 from pytorch_lightning.callbacks import RichProgressBar, StochasticWeightAveraging
-from bicycle.callbacks import ModelCheckpoint, GenerateCallback, MyLoggerCallback, CustomModelCheckpoint
-import numpy as np
-import yaml
 from pytorch_lightning.tuner.tuning import Tuner
 
 n_factors = 0
 
 add_covariates = False
-n_covariates =  0 # Number of covariates
+n_covariates = 0  # Number of covariates
 covariate_strength = 5.0
 correct_covariates = False
 
@@ -73,11 +78,11 @@ n_samples_per_perturbation = 250
 perfect_interventions = True
 make_contractive = True
 make_counts = True
-synthetic_T  = 1.0
-library_size_range = [10*n_genes, 100*n_genes]
+synthetic_T = 1.0
+library_size_range = [10 * n_genes, 100 * n_genes]
 
 # TRAINING
-lr = 1e-3 #3e-4
+lr = 1e-3  # 3e-4
 batch_size = 10_000
 USE_INITS = False
 use_encoder = False
@@ -87,10 +92,8 @@ early_stopping_patience = 500
 early_stopping_min_delta = 0.01
 # Maybe this helps to stop the loss from growing late during training (see current version
 # of Plot_Diagnostics.ipynb)
-optimizer = "adam" #"rmsprop" #"adam"
-optimizer_kwargs = {
-    "betas": [0.5,0.9] # Faster decay for estimates of gradient and gradient squared
-}
+optimizer = "adam"  # "rmsprop" #"adam"
+optimizer_kwargs = {"betas": [0.5, 0.9]}  # Faster decay for estimates of gradient and gradient squared
 gradient_clip_val = 1.0
 GPU_DEVICE = 0
 plot_epoch_callback = 500
@@ -141,32 +144,35 @@ gt_dyn, intervened_variables, samples, gt_interv, sim_regime, beta = create_data
     n_samples_per_perturbation=n_samples_per_perturbation,
     device=device,
     make_counts=make_counts,
-    T = synthetic_T,
+    T=synthetic_T,
     train_gene_ko=train_gene_ko,
     test_gene_ko=test_gene_ko,
     graph_type=graph_type,
     edge_assignment=edge_assignment,
     sem=sem,
     make_contractive=make_contractive,
-    intervention_type = intervention_type_simulation,
-    library_size_range = library_size_range,
+    intervention_type=intervention_type_simulation,
+    library_size_range=library_size_range,
     **graph_kwargs,
 )
 
 check_samples, check_gt_interv, check_sim_regime, check_beta = (
-        np.copy(samples), np.copy(gt_interv), np.copy(sim_regime), np.copy(beta)
+    np.copy(samples),
+    np.copy(gt_interv),
+    np.copy(sim_regime),
+    np.copy(beta),
 )
 
-print("eigvals B:",torch.max(torch.real(torch.linalg.eigvals(beta - torch.eye(n_genes)))))
+print("eigvals B:", torch.max(torch.real(torch.linalg.eigvals(beta - torch.eye(n_genes)))))
 
 if add_covariates:
-    
-    print('ADDING COVARIATES')
+
+    print("ADDING COVARIATES")
     # Create some artificial covariates and add them to the simulated data
     covariates = torch.randn((n_samples_total, n_covariates)).to(device)
     covariate_weights = torch.zeros((n_genes, n_covariates)).to(device)
-    
-    '''covariate_weights[0,0] = covariate_strength
+
+    """covariate_weights[0,0] = covariate_strength
     covariate_weights[1,0] = covariate_strength
     
     covariate_weights[2,1] = -covariate_strength
@@ -174,19 +180,19 @@ if add_covariates:
     
     covariate_weights[4,2] = covariate_strength
     covariate_weights[5,2] = covariate_strength
-    covariate_weights[6,2] = -covariate_strength'''
-    
-    covariate_weights[:,0] = covariate_strength
-    
-    print('covariates.shape',covariates.shape)
-    print('covariate_weights',covariate_weights)
-    
-    print('samples before:',samples[:2])
-    
-    samples = samples + torch.mm(covariates, covariate_weights.transpose(0,1)) 
-    
-    print('samples after:',samples[:2])
-    
+    covariate_weights[6,2] = -covariate_strength"""
+
+    covariate_weights[:, 0] = covariate_strength
+
+    print("covariates.shape", covariates.shape)
+    print("covariate_weights", covariate_weights)
+
+    print("samples before:", samples[:2])
+
+    samples = samples + torch.mm(covariates, covariate_weights.transpose(0, 1))
+
+    print("samples after:", samples[:2])
+
     train_loader, validation_loader, test_loader, covariates = create_loaders(
         samples,
         sim_regime,
@@ -195,25 +201,19 @@ if add_covariates:
         SEED,
         train_gene_ko,
         test_gene_ko,
-        covariates = covariates
+        covariates=covariates,
     )
-    
+
     if correct_covariates == False:
-        print('NOT CORRECTING FOR COVARIATES!')
+        print("NOT CORRECTING FOR COVARIATES!")
         covariates = None
-    
+
 else:
-    
+
     train_loader, validation_loader, test_loader = create_loaders(
-        samples,
-        sim_regime,
-        validation_size,
-        batch_size,
-        SEED,
-        train_gene_ko,
-        test_gene_ko
+        samples, sim_regime, validation_size, batch_size, SEED, train_gene_ko, test_gene_ko
     )
-    
+
     covariates = None
 
 if USE_INITS:
@@ -235,8 +235,8 @@ if covariates is not None and correct_covariates:
 
 for scale_kl in [1.0]:  # 1
     for scale_l1 in [0.1]:
-        for scale_spectral in [0.0]: # 1.0
-            for scale_lyapunov in [1.0]: # 0.1
+        for scale_spectral in [0.0]:  # 1.0
+            for scale_lyapunov in [1.0]:  # 0.1
                 file_dir = get_full_name(
                     name_prefix,
                     len(LOGO),
@@ -255,21 +255,21 @@ for scale_kl in [1.0]:  # 1
                 print("Checking Model and Plot files...")
                 final_file_name = os.path.join(MODEL_PATH, file_dir, "last.ckpt")
                 final_plot_name = os.path.join(PLOT_PATH, file_dir, "last.png")
-                
+
                 # Save simulated data for inspection and debugging
                 final_data_path = os.path.join(PLOT_PATH, file_dir)
-                
+
                 if os.path.isdir(final_data_path):
                     print(final_data_path, "exists")
                 else:
                     print("Creating", final_data_path)
                     os.mkdir(final_data_path)
-                
-                np.save(os.path.join(final_data_path,'check_sim_samples.npy'), check_samples)
-                np.save(os.path.join(final_data_path,'check_sim_regimes.npy'), check_sim_regime)
-                np.save(os.path.join(final_data_path,'check_sim_beta.npy'), check_beta)
-                np.save(os.path.join(final_data_path,'check_sim_gt_interv.npy'), check_gt_interv)
-                
+
+                np.save(os.path.join(final_data_path, "check_sim_samples.npy"), check_samples)
+                np.save(os.path.join(final_data_path, "check_sim_regimes.npy"), check_sim_regime)
+                np.save(os.path.join(final_data_path, "check_sim_beta.npy"), check_beta)
+                np.save(os.path.join(final_data_path, "check_sim_gt_interv.npy"), check_gt_interv)
+
                 if (Path(final_file_name).exists() & SAVE_PLOT & ~OVERWRITE) | (
                     Path(final_plot_name).exists() & CHECKPOINTING & ~OVERWRITE
                 ):
@@ -304,7 +304,7 @@ for scale_kl in [1.0]:  # 1
                     rank_w_cov_factor=rank_w_cov_factor,
                     init_tensors=init_tensors if USE_INITS else None,
                     optimizer=optimizer,
-                    optimizer_kwargs = optimizer_kwargs,
+                    optimizer_kwargs=optimizer_kwargs,
                     device=device,
                     scale_l1=scale_l1,
                     scale_lyapunov=scale_lyapunov,
@@ -323,10 +323,10 @@ for scale_kl in [1.0]:  # 1
                     test_gene_ko=test_gene_ko,
                     use_latents=use_latents,
                     covariates=covariates,
-                    n_factors = n_factors,
-                    intervention_type = intervention_type_inference,
-                    T = model_T,
-                    learn_T = learn_T
+                    n_factors=n_factors,
+                    intervention_type=intervention_type_inference,
+                    T=model_T,
+                    learn_T=learn_T,
                 )
                 model.to(device)
 
@@ -375,10 +375,10 @@ for scale_kl in [1.0]:  # 1
                     gradient_clip_val=gradient_clip_val,
                     default_root_dir=str(MODEL_PATH),
                     gradient_clip_algorithm="value",
-                    deterministic=False, #"warn",
+                    deterministic=False,  # "warn",
                 )
-                
-                '''print('Optimizing learning rates')
+
+                """print('Optimizing learning rates')
                 
                 tuner = Tuner(trainer)
 
@@ -398,23 +398,24 @@ for scale_kl in [1.0]:  # 1
                 print('Using learning rate of:',new_lr)
 
                 # update hparams of the model
-                model.hparams.lr = new_lr'''
+                model.hparams.lr = new_lr"""
 
-                
                 if use_latents and n_epochs_pretrain_latents > 0:
-                    
+
                     pretrain_callbacks = [
                         RichProgressBar(refresh_rate=1),
                         GenerateCallback(
-                            str(Path(final_plot_name).with_suffix("")) + '_pretrain', plot_epoch_callback=plot_epoch_callback, true_beta=beta.cpu().numpy()
-                        ),                    
+                            str(Path(final_plot_name).with_suffix("")) + "_pretrain",
+                            plot_epoch_callback=plot_epoch_callback,
+                            true_beta=beta.cpu().numpy(),
+                        ),
                     ]
-                    
+
                     if swa > 0:
                         pretrain_callbacks.append(StochasticWeightAveraging(0.01, swa_epoch_start=swa))
-    
+
                     pretrain_callbacks.append(MyLoggerCallback(dirpath=os.path.join(MODEL_PATH, file_dir)))
-                    
+
                     pretrainer = pl.Trainer(
                         max_epochs=n_epochs_pretrain_latents,
                         accelerator="gpu",  # if str(device).startswith("cuda") else "cpu",
@@ -430,17 +431,17 @@ for scale_kl in [1.0]:  # 1
                         gradient_clip_val=gradient_clip_val,
                         default_root_dir=str(MODEL_PATH),
                         gradient_clip_algorithm="value",
-                        deterministic=False, #"warn",
+                        deterministic=False,  # "warn",
                     )
-                    
-                    print('PRETRAINING LATENTS!')
+
+                    print("PRETRAINING LATENTS!")
                     start_time = time.time()
                     model.train_only_likelihood = True
                     # assert False
                     pretrainer.fit(model, train_loader, validation_loader)
                     end_time = time.time()
                     model.train_only_likelihood = False
-                
+
                 # try:
                 start_time = time.time()
                 # assert False

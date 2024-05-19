@@ -1,10 +1,10 @@
-from torch import nn
-import torch
-from bicycle.utils.training import EarlyStopperTorch, lyapunov_direct
-import torch.optim as optim
 import pytorch_lightning as pl
+import torch
+import torch.optim as optim
+from torch import Tensor, nn
 from torch.distributions.kl import kl_divergence
-from torch import Tensor
+
+from bicycle.utils.training import EarlyStopperTorch, lyapunov_direct
 
 
 def init_weights(m):
@@ -66,7 +66,7 @@ class BICYCLE_EVAL(pl.LightningModule):
         train_gene_ko: list = None,
         test_gene_ko: list = None,
         use_latents: bool = True,
-        pred_gene: int = -1
+        pred_gene: int = -1,
     ):
         super().__init__()
 
@@ -355,11 +355,11 @@ class BICYCLE_EVAL(pl.LightningModule):
         return z_kl
 
     def compute_nll_loss(self, samples, sample_idx, sim_regime, mvn=None):
-        
-        pred_mask = torch.ones(samples.shape, device = samples.device)
+
+        pred_mask = torch.ones(samples.shape, device=samples.device)
         if self.pred_gene >= 0:
-            pred_mask[:,self.pred_gene] = 0.0
-        
+            pred_mask[:, self.pred_gene] = 0.0
+
         """Compute NLL Loss."""
         if self.use_latents:
             if self.x_distribution == "Poisson":
@@ -375,10 +375,10 @@ class BICYCLE_EVAL(pl.LightningModule):
                 z_scales = self.pos(self.z_scale[sample_idx])
                 P = torch.distributions.normal.Normal(loc=z_locs, scale=z_scales)
 
-            return -1 * (pred_mask*P.log_prob(samples)).mean()
+            return -1 * (pred_mask * P.log_prob(samples)).mean()
 
         else:
-            return -1 * (pred_mask*mvn.log_prob(samples)).mean()
+            return -1 * (pred_mask * mvn.log_prob(samples)).mean()
 
     def training_step(self, batch, batch_idx):
         kwargs = {"on_step": False, "on_epoch": True}
@@ -399,7 +399,7 @@ class BICYCLE_EVAL(pl.LightningModule):
             sample_idx_test,
         ) = self.split_samples(samples, sim_regime, sample_idx, data_category)
 
-        alphas, _, B, sigmas = self.get_updated_states()     
+        alphas, _, B, sigmas = self.get_updated_states()
 
         # We only optimize LATENTS in the EVAL CLASS case we face valid or test data, we have to detach some parameters that must not get an update
         B_detached = B.detach()
@@ -435,15 +435,15 @@ class BICYCLE_EVAL(pl.LightningModule):
         #
 
         # Rescale combined KL divergence (train, valid and test) by number of genes
-        z_kl = z_kl / self.n_genes     
+        z_kl = z_kl / self.n_genes
 
         loss = neg_log_likelihood + z_kl
-        
+
         self.log(f"{prefix}_loss", loss, **kwargs)
-        
+
         return loss
 
-    #def validation_step(self, batch, batch_idx):
+    # def validation_step(self, batch, batch_idx):
     #    self.training_step(batch, batch_idx)
 
     def predict_step(self, batch, dataloader_idx=0):
@@ -475,7 +475,7 @@ class BICYCLE_EVAL(pl.LightningModule):
     def forward(self):
         raise NotImplementedError()
 
-    '''def on_validation_epoch_end(self):
+    """def on_validation_epoch_end(self):
         if self.early_stopping:
             avg_loss = torch.stack(self.validation_step_outputs).mean()
             self.log("avg_valid_loss", avg_loss)
@@ -484,4 +484,4 @@ class BICYCLE_EVAL(pl.LightningModule):
                 print(f"Earlystopping due to convergence at step {self.current_epoch}")
                 self.trainer.should_stop = True
 
-            self.validation_step_outputs.clear()'''
+            self.validation_step_outputs.clear()"""

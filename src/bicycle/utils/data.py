@@ -1,12 +1,13 @@
-import torch
-import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
-from bicycle.utils.training import lyapunov_direct
+import numpy as np
 import seaborn as sns
+import torch
+from bicycle.utils.training import lyapunov_direct
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+
 
 def create_data(
     n_genes,
@@ -21,9 +22,9 @@ def create_data(
     make_contractive=True,
     verbose=False,
     device="cpu",
-    intervention_type = "dCas9",
-    T = 1.0,
-    library_size_range = [5000, 25000],
+    intervention_type="dCas9",
+    T=1.0,
+    library_size_range=[5000, 25000],
     **graph_kwargs,
 ):
     N = n_genes
@@ -151,26 +152,26 @@ def create_data(
         beta_p = torch.zeros((N, N), device=device)
 
         iv_a = (1 - gt_interv).T
-        
+
         if intervention_type == "dCas9":
-            
-            print('Simulating data of intervention type dCas9')
-            
+
+            print("Simulating data of intervention type dCas9")
+
             betas = iv_a[:, None, :] * beta + (1 - iv_a)[:, None, :] * beta_p
             alphas = iv_a * alpha[None, :] + (1 - iv_a) * alpha_p[None, :]
             sigmas = iv_a[:, None, :] * torch.diag(sigma) + (1 - iv_a)[:, None, :] * torch.diag(sigma_p)
-            
-            print('Shapes dCas9:',betas.shape, alphas.shape, sigmas.shape)
-            
+
+            print("Shapes dCas9:", betas.shape, alphas.shape, sigmas.shape)
+
         elif intervention_type == "Cas9":
-            
-            print('Simulating data of intervention type Cas9')
-            
+
+            print("Simulating data of intervention type Cas9")
+
             betas = iv_a[:, :, None] * beta + (1 - iv_a)[:, :, None] * beta_p
-            alphas = alpha[None, :].expand(iv_a.shape[0],alpha.shape[0])
-            sigmas = torch.diag(sigma)[None, :, :].expand(iv_a.shape[0],sigma.shape[0],sigma.shape[0])
-            
-            print('Shapes Cas9:',betas.shape, alphas.shape, sigmas.shape)
+            alphas = alpha[None, :].expand(iv_a.shape[0], alpha.shape[0])
+            sigmas = torch.diag(sigma)[None, :, :].expand(iv_a.shape[0], sigma.shape[0], sigma.shape[0])
+
+            print("Shapes Cas9:", betas.shape, alphas.shape, sigmas.shape)
         else:
             raise NotImplementedError("Currently only Cas9 and dCas9 are supported as intervention_type.")
 
@@ -238,9 +239,11 @@ def create_data(
                 high=library_size_range[1],
                 size=(samples.shape[0], 1),
             )
-            
+
             for i in tqdm(range(samples.shape[0])):
-                P = torch.distributions.multinomial.Multinomial(total_count=library_size[i].item(), probs=ps[i]) 
+                P = torch.distributions.multinomial.Multinomial(
+                    total_count=library_size[i].item(), probs=ps[i]
+                )
                 samples[i] = P.sample()
 
         if verbose:
@@ -356,15 +359,15 @@ def create_loaders(
 
         sample_test = samples[idx_test_samples]
         samples_interventions_test = samples_interventions[idx_test_samples]
-        
+
         samples = samples[~idx_test_samples]
         samples_interventions = samples_interventions[~idx_test_samples]
-        
-        if covariates is not None:            
-            print('covariates device before:', covariates.device)
-            covariates_test = covariates[idx_test_samples]            
+
+        if covariates is not None:
+            print("covariates device before:", covariates.device)
+            covariates_test = covariates[idx_test_samples]
             covariates = covariates[~idx_test_samples]
-            print('covariates device after:', covariates.device)
+            print("covariates device after:", covariates.device)
 
         if validation_size > 0:
             # Stratify train and validation sets across conditions
@@ -413,16 +416,11 @@ def create_loaders(
             )
 
             assert len(train_dataset) == (len(train_idx) + len(validation_idx) + len(sample_test))
-            
+
             if covariates is not None:
                 covariates_reordered = torch.concatenate(
-                                           ( 
-                                               covariates[train_idx],
-                                               covariates[validation_idx],
-                                               covariates_test 
-                                           ),
-                                           axis = 0                    
-                                       )
+                    (covariates[train_idx], covariates[validation_idx], covariates_test), axis=0
+                )
 
         else:
             train_dataset = torch.utils.data.TensorDataset(
@@ -449,15 +447,9 @@ def create_loaders(
                 torch.arange(len(samples), len(samples) + len(sample_test)),
                 2 * torch.ones(sample_test.shape[0]),
             )
-            
+
             if covariates is not None:
-                covariates_reordered = torch.concatenate(
-                                           ( 
-                                               covariates,
-                                               covariates_test 
-                                           ),
-                                           axis = 0                    
-                                       )
+                covariates_reordered = torch.concatenate((covariates, covariates_test), axis=0)
 
     else:
         # Leave one group out for testing
@@ -493,16 +485,12 @@ def create_loaders(
                 torch.arange(len(train_idx), len(train_idx) + len(validation_idx)),
                 torch.ones(samples[validation_idx].shape[0]),
             )
-            
+
             if covariates is not None:
                 covariates_reordered = torch.concatenate(
-                                           ( 
-                                               covariates[train_idx],
-                                               covariates[validation_idx]
-                                           ),
-                                           axis = 0                    
-                                       )
-            
+                    (covariates[train_idx], covariates[validation_idx]), axis=0
+                )
+
         else:
             train_dataset = torch.utils.data.TensorDataset(
                 samples,
@@ -510,7 +498,7 @@ def create_loaders(
                 torch.arange(len(samples)),
                 torch.zeros(samples.shape[0]),
             )
-            
+
             if covariates is not None:
                 covariates_reordered = covariates
 
@@ -573,23 +561,23 @@ def compute_inits(init_data, rank_w_cov_factor, n_contexts, normalized=False):
     nc = samples.shape[0]
 
     count_per_gene = samples.sum(axis=0)
-    
+
     print(count_per_gene)
 
     if not normalized:
         alpha = torch.log(count_per_gene / count_per_gene.sum())
-        
-        print('alpha',alpha)
+
+        print("alpha", alpha)
 
         library_size = samples.sum(axis=1).reshape((-1, 1))
-        
-        print('library_size',library_size.min(),library_size.median(),library_size.max())
+
+        print("library_size", library_size.min(), library_size.median(), library_size.max())
 
         normalized_counts = torch.log(samples / library_size + 1e-6)
         standardized_counts = normalized_counts - normalized_counts.mean(axis=0)
-        
-        print(standardized_counts[:10,:10])
-        
+
+        print(standardized_counts[:10, :10])
+
     else:
         alpha = count_per_gene / count_per_gene.sum()
         standardized_counts = samples
@@ -782,15 +770,15 @@ def create_loaders_norman(
 
         samples_test = samples[idx_test_samples]
         regimes_test = regimes[idx_test_samples]
-        
+
         samples = samples[~idx_test_samples]
         regimes = regimes[~idx_test_samples]
-        
-        if covariates is not None:            
-            print('covariates device before:', covariates.device)
-            covariates_test = covariates[idx_test_samples]            
+
+        if covariates is not None:
+            print("covariates device before:", covariates.device)
+            covariates_test = covariates[idx_test_samples]
             covariates = covariates[~idx_test_samples]
-            print('covariates device after:', covariates.device)
+            print("covariates device after:", covariates.device)
 
         if validation_size > 0:
             # Stratify train and validation sets across conditions
@@ -839,16 +827,11 @@ def create_loaders_norman(
             )
 
             assert len(train_dataset) == (len(train_idx) + len(validation_idx) + len(samples_test))
-            
+
             if covariates is not None:
                 covariates_reordered = torch.concatenate(
-                                           ( 
-                                               covariates[train_idx],
-                                               covariates[validation_idx],
-                                               covariates_test 
-                                           ),
-                                           axis = 0                    
-                                       )
+                    (covariates[train_idx], covariates[validation_idx], covariates_test), axis=0
+                )
 
         else:
             train_dataset = torch.utils.data.TensorDataset(
@@ -875,15 +858,9 @@ def create_loaders_norman(
                 torch.arange(len(samples), len(samples) + len(samples_test)),
                 2 * torch.ones(samples_test.shape[0]),
             )
-            
+
             if covariates is not None:
-                covariates_reordered = torch.concatenate(
-                                           ( 
-                                               covariates,
-                                               covariates_test 
-                                           ),
-                                           axis = 0                    
-                                       )
+                covariates_reordered = torch.concatenate((covariates, covariates_test), axis=0)
 
     else:
         # Leave one group out for testing
@@ -919,16 +896,12 @@ def create_loaders_norman(
                 torch.arange(len(train_idx), len(train_idx) + len(validation_idx)),
                 torch.ones(samples[validation_idx].shape[0]),
             )
-            
+
             if covariates is not None:
                 covariates_reordered = torch.concatenate(
-                                           ( 
-                                               covariates[train_idx],
-                                               covariates[validation_idx]
-                                           ),
-                                           axis = 0                    
-                                       )
-            
+                    (covariates[train_idx], covariates[validation_idx]), axis=0
+                )
+
         else:
             train_dataset = torch.utils.data.TensorDataset(
                 samples,
@@ -936,7 +909,7 @@ def create_loaders_norman(
                 torch.arange(len(samples)),
                 torch.zeros(samples.shape[0]),
             )
-            
+
             if covariates is not None:
                 covariates_reordered = covariates
 

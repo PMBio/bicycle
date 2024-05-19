@@ -1,8 +1,9 @@
+from pathlib import Path
+
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
-from pathlib import Path
-import numpy as np
 
 
 def plot_training_results(
@@ -31,8 +32,8 @@ def plot_training_results(
         id_vars=["epoch"], value_vars=[x for x in df_plot.columns if "valid_" in x]
     )
 
-    df_plot_train.to_csv( str(Path(file_name_plot).with_suffix("")) + f"_log_train.csv" )
-    df_plot_valid.to_csv( str(Path(file_name_plot).with_suffix("")) + f"_log_valid.csv" )
+    df_plot_train.to_csv(str(Path(file_name_plot).with_suffix("")) + f"_log_train.csv")
+    df_plot_valid.to_csv(str(Path(file_name_plot).with_suffix("")) + f"_log_valid.csv")
 
     sns.scatterplot(
         df_plot_train,
@@ -89,8 +90,8 @@ def plot_training_results(
             ax=ax[0, 0],
             cbar=False,
         )
-        
-        np.save(str(Path(file_name_plot).with_suffix("")) + f"_true_beta.npy", true_beta )
+
+        np.save(str(Path(file_name_plot).with_suffix("")) + f"_true_beta.npy", true_beta)
 
     sns.heatmap(
         estimated_beta,
@@ -104,8 +105,11 @@ def plot_training_results(
     )
     ax[0, 0].set_title("True")
     ax[0, 1].set_title("Estimated")
-    
-    np.save(str(Path(file_name_plot).with_suffix("")) +  f"_estimated_beta_epoch{trainer.current_epoch}.npy", estimated_beta)
+
+    np.save(
+        str(Path(file_name_plot).with_suffix("")) + f"_estimated_beta_epoch{trainer.current_epoch}.npy",
+        estimated_beta,
+    )
 
     if pl_module.mask is not None:
         sns.heatmap(
@@ -157,7 +161,7 @@ def plot_training_results(
         plt.close(fig)
         plt.close("all")
 
-        '''y_axis = [
+        """y_axis = [
             "CST3",
             "PTMA",
             "LGALS3",
@@ -235,7 +239,7 @@ def plot_training_results(
             str(Path(file_name_plot).with_suffix("")) + f"_heatmap_epoch{trainer.current_epoch}.png", bbox_inches="tight"
         )
         plt.close(fig)
-        plt.close("all")'''
+        plt.close("all")"""
 
 
 def plot_style(minimal=True):

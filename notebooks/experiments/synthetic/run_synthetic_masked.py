@@ -2,10 +2,14 @@ import warnings
 
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 
-import time
 import os
-from pathlib import Path
+import pdb
+import sys
+import time
+import traceback
 from os import environ
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import pytorch_lightning as pl
@@ -13,18 +17,20 @@ import seaborn as sns
 import torch
 from bicycle.dictlogger import DictLogger
 from bicycle.model import BICYCLE
-from bicycle.utils.training import GenerateCallback
 from bicycle.utils.data import (
+    compute_inits,
     create_data,
     create_loaders,
+    get_diagonal_mask,
     get_names,
     get_ring_mask,
-    get_diagonal_mask,
-    compute_inits,
 )
-from pytorch_lightning.callbacks import ModelCheckpoint, RichProgressBar, StochasticWeightAveraging
-import pdb, traceback, sys
-
+from bicycle.utils.training import GenerateCallback
+from pytorch_lightning.callbacks import (
+    ModelCheckpoint,
+    RichProgressBar,
+    StochasticWeightAveraging,
+)
 
 SEED = 3141
 pl.seed_everything(SEED)

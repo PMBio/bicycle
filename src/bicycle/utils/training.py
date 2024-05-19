@@ -1,7 +1,8 @@
+import os
+import random
+
 import numpy as np
 import torch
-import random
-import os
 
 
 # from: https://gist.github.com/yulkang/4a597bcc5e9ccf8c7291f8ecb776382d

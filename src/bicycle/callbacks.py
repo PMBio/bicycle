@@ -1,10 +1,12 @@
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pathlib import Path
+
+import pandas as pd
 import pytorch_lightning as pl
 import torch
-from bicycle.utils.plotting import plot_training_results
-import pandas as pd
-from pathlib import Path
 import yaml
+from pytorch_lightning.callbacks import ModelCheckpoint
+
+from bicycle.utils.plotting import plot_training_results
 
 
 class MyLoggerCallback(pl.Callback):
@@ -20,7 +22,7 @@ class MyLoggerCallback(pl.Callback):
             "finished": True,
             "n_epochs": trainer.current_epoch,
             "n_steps": trainer.global_step,
-            "early_stopping": trainer.model.early_stopping
+            "early_stopping": trainer.model.early_stopping,
         }
         if trainer.model.early_stopping:
             training_stats = training_stats | {
@@ -39,6 +41,7 @@ class MyLoggerCallback(pl.Callback):
         print(f"Saving training stats to {filepath}...")
         with open(filepath, "w") as outfile:
             yaml.dump(training_stats, outfile, default_flow_style=False)
+
 
 # Subclass _should_skip_saving_checkpoint
 class CustomModelCheckpoint(ModelCheckpoint):
@@ -78,9 +81,11 @@ class GenerateCallback(pl.Callback):
                     if pl_module.n_factors == 0:
                         estimated_beta = pl_module.beta.detach().cpu().numpy()
                     else:
-                        estimated_beta = torch.einsum("ij,jk->ik", pl_module.gene2factor, pl_module.factor2gene) 
+                        estimated_beta = torch.einsum(
+                            "ij,jk->ik", pl_module.gene2factor, pl_module.factor2gene
+                        )
                         beta_diag = torch.diagonal(estimated_beta, offset=0, dim1=-2, dim2=-1)
-                        beta_diag[:]=0
+                        beta_diag[:] = 0
                         estimated_beta = estimated_beta.detach().cpu().numpy()
                 else:
                     estimated_beta = torch.zeros(
@@ -101,5 +106,5 @@ class GenerateCallback(pl.Callback):
                 pl_module.scale_lyapunov,
                 self.file_name_plot,
                 callback=True,
-                labels=self.labels
+                labels=self.labels,
             )
