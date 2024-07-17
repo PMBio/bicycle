@@ -4,6 +4,8 @@ import random
 import os
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from typing import Optional, Tuple
+import copy
+import optuna
 
 
 # from: https://gist.github.com/yulkang/4a597bcc5e9ccf8c7291f8ecb776382d
@@ -66,6 +68,36 @@ def seed_everything(seed: int):
     # Only for Apple chips
     torch.mps.manual_seed(seed)
 
+
+def suggest_hparams(
+        config: dict, trial: optuna.trial.Trial, basename: str = ""
+) -> dict:
+    """Select hyperparameter values to configuration file based on Optuna's suggested hyperparamter values.
+
+    Args:
+        config (Dict): Configuration dictionary with hparam specification.
+        trial (optuna.trial.Trial): Optuna trial instance
+        basename (str, optional): Base name for hyperparameter suggestions. Defaults to "".
+
+    Returns:
+        Dict: Updated configuration file with the Optuna selected hyperparameters.
+    """
+
+    config = copy.deepcopy(config)
+    for k, cfg in config.items():
+        if isinstance(cfg, dict):
+            if list(cfg.keys()) == ["hparam"]:
+                suggest_fn = getattr(trial, f'suggest_{cfg["hparam"]["type"]}')
+                args_ = cfg["hparam"].get("args", [])
+                kwargs_ = cfg["hparam"].get("kwargs",{})
+                name = f"{basename}{k}"
+                suggestion = suggest_fn(name, *args_, **kwargs_)
+                print(f"{name}\t{suggestion}")
+                config[k] = suggestion
+            else: # Nested entry in hyperparameter
+                config[k] = suggest_hparams(cfg, trial, f"{basename}{k}/")
+
+    return config
 
 class EarlyStopper(object):
     """Class to manage early stopping of model training."""

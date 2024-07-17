@@ -835,9 +835,12 @@ class BICYCLE(pl.LightningModule):
                 self.log(f"{prefix}_lyapunov", loss_lyapunov, **kwargs)
         else:
             if self.early_stopping:
-                self.validation_step_outputs.append(loss)
+                if self.train_only_likelihood: #When in pretraining
+                    self.validation_step_outputs.append(neg_log_likelihood)
+                else:
+                    self.validation_step_outputs.append(loss)
 
-        if self.train_only_likelihood:
+        if self.train_only_likelihood: #When in pretraining
             loss = neg_log_likelihood
                 
         return loss
@@ -991,15 +994,17 @@ class BICYCLE(pl.LightningModule):
         raise NotImplementedError()
 
     def on_validation_epoch_end(self):
-        if self.early_stopping:
-            avg_loss = torch.stack(self.validation_step_outputs).mean()
-            self.log("avg_valid_loss", avg_loss)
+        #if self.early_stopping:
+        avg_loss = torch.stack(self.validation_step_outputs).mean()
+        self.log("avg_valid_loss", avg_loss)
 
-            # if self.earlystopper.step(avg_loss):
-            #     print(f"Earlystopping due to convergence at step {self.current_epoch}")
-            #     self.trainer.should_stop = True
+        # if self.earlystopper.step(avg_loss):
+        #     print(f"Earlystopping due to convergence at step {self.current_epoch}")
+        #     self.trainer.should_stop = True
 
-            self.validation_step_outputs.clear()
+        self.avg_valid_loss = avg_loss
+
+        self.validation_step_outputs.clear()
 
     def on_fit_end(self):
         self.is_fitted = True

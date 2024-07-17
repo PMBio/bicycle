@@ -1,5 +1,4 @@
 import warnings
-
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -19,13 +18,17 @@ from bicycle.utils.data import (
 )
 from bicycle.utils.general import get_full_name
 from bicycle.utils.plotting import plot_training_results
-from bicycle.utils.training import EarlyStopping_mod
+from bicycle.utils.training import EarlyStopping_mod, suggest_hparams
 from pytorch_lightning.callbacks import RichProgressBar, StochasticWeightAveraging
 from bicycle.callbacks import ModelCheckpoint, GenerateCallback, MyLoggerCallback, CustomModelCheckpoint
 import numpy as np
 import yaml
-from pytorch_lightning.tuner.tuning import Tuner
+#from pytorch_lightning.tuner.tuning import Tuner
 import click
+import optuna
+from pprint import pformat, pprint
+from typing import Optional
+import copy
 
 SEED = 1
 pl.seed_everything(SEED)
@@ -35,14 +38,258 @@ if environ["USER"] == "m015k":
     user_dir = "/home/m015k/code/bicycle/notebooks/data"
 else:
     user_dir = "."
-MODEL_PATH = Path(os.path.join(user_dir, "models"))
-PLOT_PATH = Path(os.path.join(user_dir, "plots"))
-MODEL_PATH.mkdir(parents=True, exist_ok=True)
-PLOT_PATH.mkdir(parents=True, exist_ok=True)
+#MODEL_PATH = Path(os.path.join(user_dir, "models"))
+#PLOT_PATH = Path(os.path.join(user_dir, "plots"))
+DATA_PATH = Path(os.path.join(user_dir, "data"))
+#MODEL_PATH.mkdir(parents=True, exist_ok=True)
+#PLOT_PATH.mkdir(parents=True, exist_ok=True)
+DATA_PATH.mkdir(parents=True, exist_ok=True)
+LOG_DIR = Path(user_dir)
 
 @click.group()
 def cli():
     pass
+
+
+def run_pretrain(
+        config: dict,
+        model,
+        train_loader,
+        validation_loader,
+        trial_id,
+        beta,
+        loggers,
+):
+        
+    #Create directories for plot and model saving
+    pretrain_model_dir = f"trial_{trial_id}/pretrain/model"
+    Path(os.path.join(LOG_DIR, pretrain_model_dir)).mkdir(parents=True, exist_ok=True)
+    Path(os.path.join(LOG_DIR, f"trial_{trial_id}", "plot")).mkdir(parents=True, exist_ok=True)
+    pretrain_plot_dir = f"trial_{trial_id}/pretrain/plot"
+    Path(os.path.join(LOG_DIR, pretrain_plot_dir)).mkdir(parents=True, exist_ok=True)
+    final_plot_name = os.path.join(LOG_DIR, pretrain_plot_dir,"last_pretrain.png")
+    pretrain_callbacks = [
+        RichProgressBar(refresh_rate=1),
+        GenerateCallback(
+            final_plot_name, plot_epoch_callback=config["training"]["plot_epoch_callback"], true_beta=beta.cpu().numpy()
+        ),                    
+    ]
+    
+    if config["model"]["config"]["swa"] > 0:
+        pretrain_callbacks.append(StochasticWeightAveraging(0.01, swa_epoch_start=config["model"]["config"]["swa"]))
+
+    pretrain_callbacks.append(MyLoggerCallback(dirpath=os.path.join(LOG_DIR, pretrain_model_dir)))
+
+    if "early_stopping" in config:
+        pretrain_callbacks.append(
+            EarlyStopping_mod(
+                monitor="avg_valid_loss",
+                **config["training"]["early_stopping"])
+    )
+    
+    pretrainer = pl.Trainer(
+        min_epochs=config["training"]["min_epochs_pretrain_latents"],
+        max_epochs=config["training"]["n_epochs_pretrain_latents"],
+        accelerator="gpu",  # if str(device).startswith("cuda") else "cpu",
+        logger=loggers,
+        log_every_n_steps=config["training"]["log_every_n_steps"],
+        enable_model_summary=True,
+        enable_progress_bar=True,
+        enable_checkpointing=config["training"]["CHECKPOINTING"],
+        check_val_every_n_epoch=config["training"]["check_val_every_n_epoch"],
+        devices=[config["training"]["GPU_DEVICE"]],  # if str(device).startswith("cuda") else 1,
+        num_sanity_val_steps=0,
+        callbacks=pretrain_callbacks,
+        gradient_clip_val=config["training"]["gradient_clip_val"],
+        default_root_dir=str(os.path.join(LOG_DIR, pretrain_model_dir)),
+        gradient_clip_algorithm="value",
+        deterministic=False, #"warn",
+    )
+    
+    print('PRETRAINING LATENTS!')
+    start_time = time.time()
+    model.train_only_likelihood = True
+    # assert False
+    pretrainer.fit(model, train_loader, validation_loader)
+    end_time = time.time()
+    model.train_only_likelihood = False
+
+    return model
+
+
+def run_training(
+       config: dict, 
+       train_loader,
+       validation_loader,
+       n_samples_total,
+       device, gt_interv, n_genes,
+       train_gene_ko, test_gene_ko, beta,
+       covariates,
+       trial: Optional[optuna.trial.Trial] = None,
+       trial_id: Optional[int] = None, 
+):
+
+    config_train = copy.deepcopy(config)
+    if trial is not None:
+        # Parameters set in config can be used to indicate hyperparameter optimization.
+        # Set as the following:
+        # lr: 
+        #     hparam:
+        #         type: 'float'  
+        #             args:
+        #                 - 1.0e-5
+        #                 - 1.0e-1
+        #             kwargs:
+        #                 log: True
+        # This translates to Optuna's suggest_float
+        # lr = optuna.suggest_float(name="lr", low=1.0e-3, high=1.0e-1, log=True)
+        # and afterward replace the respective area in config to the suggestion.
+        config_train["model"]["config"] = suggest_hparams(config["model"]["config"], trial)
+        print("Model hyperparameters this trial:")
+        pprint(config_train["model"]["config"])
+        Path(LOG_DIR / f"trial_{trial_id}").mkdir(parents=True, exist_ok=True)
+        config_out = Path(LOG_DIR) / f"trial_{trial_id}" / "hpopt_config.yaml"
+        with open(config_out, "w") as f:
+            yaml.dump(config_train, f)
+
+    if config_train["model"]["config"]["USE_INITS"]:
+        init_tensors = compute_inits(train_loader.dataset, config_train["rank_w_cov_factor"], config_train["n_contexts"] + 1 )
+
+    # Create Mask
+    mask = get_diagonal_mask(config_train["n_genes"], DEVICE)
+    if config_train["n_factors"] > 0:
+        mask = None
+
+    model = BICYCLE(
+        config_train["model"]["config"]["lr"],
+        gt_interv,
+        n_genes,
+        n_samples=n_samples_total,
+        lyapunov_penalty=config_train["model"]["config"]["lyapunov_penalty"],
+        perfect_interventions=config_train["perfect_interventions"],
+        rank_w_cov_factor=config_train["rank_w_cov_factor"],
+        init_tensors=init_tensors if config_train["model"]["config"]["USE_INITS"] else None,
+        optimizer=config_train["model"]["config"]["optimizer"],
+        optimizer_kwargs = config_train["model"]["config"]["optimizer_kwargs"],
+        device=device,
+        scale_l1=config_train["model"]["config"]["scale_l1"],
+        scale_lyapunov=config_train["model"]["config"]["scale_lyapunov"],
+        scale_spectral=config_train["model"]["config"]["scale_spectral"],
+        scale_kl=config_train["model"]["config"]["scale_kl"],
+        early_stopping=True if "early_stopping" in config_train["training"] else False,
+        x_distribution=config_train["model"]["config"]["x_distribution"],
+        x_distribution_kwargs=config_train["model"]["config"]["x_distribution_kwargs"],
+        mask=mask,
+        use_encoder=config_train["model"]["config"]["use_encoder"],
+        gt_beta=beta,
+        train_gene_ko=train_gene_ko,
+        test_gene_ko=test_gene_ko,
+        use_latents=config_train["model"]["config"]["use_latents"],
+        covariates=covariates,
+        n_factors = config_train["n_factors"],
+        intervention_type = config_train["intervention_type_inference"],
+        T = config_train["model"]["config"]["model_T"],
+        learn_T = config_train["model"]["config"]["learn_T"]
+    )
+    model.to(device)
+
+    dlogger = DictLogger()
+    loggers = [dlogger]
+
+    Path(os.path.join(LOG_DIR, f"trial_{trial_id}", "plot")).mkdir(parents=True, exist_ok=True)
+    callbacks = [
+        RichProgressBar(refresh_rate=1),
+        GenerateCallback(
+            Path(os.path.join(LOG_DIR, f"trial_{trial_id}", "plot")), plot_epoch_callback=config_train["training"]["plot_epoch_callback"], true_beta=beta.cpu().numpy()
+        ),
+    ]
+    
+    if "early_stopping" in config_train["training"]:
+        callbacks.append(
+            EarlyStopping_mod(
+                monitor="avg_valid_loss",
+                **config_train["training"]["early_stopping"])
+        )
+    
+    if config_train["model"]["config"]["swa"] > 0:
+        callbacks.append(StochasticWeightAveraging(0.01, swa_epoch_start=config_train["model"]["config"]["swa"]))
+    if config_train["training"]["CHECKPOINTING"]:
+        Path(os.path.join(LOG_DIR, f"trial_{trial_id}", "model")).mkdir(parents=True, exist_ok=True)
+
+        callbacks.append(MyLoggerCallback(dirpath=os.path.join(LOG_DIR, f"trial_{trial_id}", "model")))
+
+        callbacks.append(
+            CustomModelCheckpoint(
+                dirpath=os.path.join(LOG_DIR, f"trial_{trial_id}", "model"),
+                filename="{epoch}",
+                save_last=True,
+                save_top_k=1,
+                verbose=config_train["training"]["VERBOSE_CHECKPOINTING"],
+                monitor="valid_loss",
+                mode="min",
+                save_weights_only=True,
+                start_after=0,
+                save_on_train_epoch_end=False,
+                every_n_epochs=10,
+            )
+        )
+
+    trainer = pl.Trainer(
+        min_epochs=config_train["training"]["min_epochs_train"],
+        max_epochs=config_train["training"]["n_epochs"],
+        accelerator="gpu",  # if str(device).startswith("cuda") else "cpu",
+        logger=loggers,
+        log_every_n_steps=config_train["training"]["log_every_n_steps"],
+        enable_model_summary=True,
+        enable_progress_bar=True,
+        enable_checkpointing=config_train["training"]["CHECKPOINTING"],
+        check_val_every_n_epoch=config_train["training"]["check_val_every_n_epoch"],
+        devices=[config_train["training"]["GPU_DEVICE"]],  # if str(device).startswith("cuda") else 1,
+        num_sanity_val_steps=0,
+        callbacks=callbacks,
+        gradient_clip_val=config_train["training"]["gradient_clip_val"],
+        default_root_dir=str(os.path.join(LOG_DIR, f"trial_{trial_id}", "model")),
+        gradient_clip_algorithm="value",
+        deterministic=False, #"warn",
+    )
+    
+    # Pre-train model latent parameters if specified in config
+    if config_train["model"]["config"]["use_latents"] and config_train["training"]["n_epochs_pretrain_latents"] > 0:
+        model = run_pretrain(config_train,
+                             model,
+                             train_loader,
+                             validation_loader,
+                             trial_id,
+                             beta,
+                             loggers,
+        )
+
+    start_time = time.time()
+    # assert False
+    trainer.fit(model, train_loader, validation_loader)
+    end_time = time.time()
+    print(f"Training took {end_time - start_time:.2f} seconds")
+
+    final_plot_name = os.path.join(LOG_DIR, f"trial_{trial_id}", "plot","last.png")
+    plot_training_results(
+        trainer,
+        model,
+        model.beta.detach().cpu().numpy(),
+        beta,
+        config_train["model"]["config"]["scale_l1"],
+        config_train["model"]["config"]["scale_kl"],
+        config_train["model"]["config"]["scale_spectral"],
+        config_train["model"]["config"]["scale_lyapunov"],
+        final_plot_name,
+        callback=False,
+    )
+
+    if config_train["training"]["CHECKPOINTING"]:
+        trial.set_user_attr( #TODO: change callbacks to dictionary to reference explicitly "CustomModelCheckpoint"
+            "checkpoint_path", callbacks[-2].best_model_path
+        )
+
+    return model.avg_valid_loss
 
 @cli.command()
 @click.argument("config-file", type=click.Path(exists=True, path_type=Path))
@@ -53,7 +300,6 @@ def run_synthetic_experiment(
         config = yaml.safe_load(fd)
 
     # Settings
-    n_contexts = config["n_contexts"] + 1  # Number of contexts
     library_size_range = [config["library_size_range_factors"][0]*config["n_genes"], config["library_size_range_factors"][1]*config["n_genes"]]
 
     LOGO = []
@@ -64,12 +310,6 @@ def run_synthetic_experiment(
     )
     test_gene_ko = [f"{x[0]},{x[1]}" for x in ho_perturbations]
     n_samples_total = config["n_samples_control"] + (len(train_gene_ko) + len(test_gene_ko)) * config["n_samples_per_perturbation"]
-
-    # Create Mask
-    mask = get_diagonal_mask(config["n_genes"], DEVICE)
-
-    if config["n_factors"] > 0:
-        mask = None
 
     # Create synthetic data
     gt_dyn, intervened_variables, samples, gt_interv, sim_regime, beta = create_data(
@@ -126,8 +366,8 @@ def run_synthetic_experiment(
         train_loader, validation_loader, test_loader, covariates = create_loaders(
             samples,
             sim_regime,
-            config["validation_size"],
-            config["batch_size"],
+            config["training"]["validation_size"],
+            config["training"]["batch_size"],
             SEED,
             train_gene_ko,
             test_gene_ko,
@@ -141,280 +381,147 @@ def run_synthetic_experiment(
         train_loader, validation_loader, test_loader = create_loaders(
             samples,
             sim_regime,
-            config["validation_size"],
-            config["batch_size"],
+            config["training"]["validation_size"],
+            config["training"]["batch_size"],
             SEED,
             train_gene_ko,
             test_gene_ko
         )
         covariates = None
 
-    if config["USE_INITS"]:
-        init_tensors = compute_inits(train_loader.dataset, config["rank_w_cov_factor"], n_contexts)
-
     print("Training data:")
     print(f"- Number of training samples: {len(train_loader.dataset)}")
-    if config["validation_size"] > 0:
+    if config["training"]["validation_size"] > 0:
         print(f"- Number of validation samples: {len(validation_loader.dataset)}")
     if LOGO:
         print(f"- Number of test samples: {len(test_loader.dataset)}")
 
-    device = torch.device(f"cuda:{config['GPU_DEVICE']}")
+    device = torch.device(f"cuda:{config['training']['GPU_DEVICE']}")
     gt_interv = gt_interv.to(device)
     n_genes = samples.shape[1]
 
     if covariates is not None and config["correct_covariates"]:
         covariates = covariates.to(device)
     
-    for scale_l1, scale_kl, scale_spectral, scale_lyapunov in zip(
-        config["scale_l1"],config["scale_kl"],config["scale_spectral"],config["scale_lyapunov"]
-    ):
-        file_dir = get_full_name(
-            ''.join(str(i) for i in config["name_prefix"]),
-            len(LOGO),
-            SEED,
-            config["lr"],
-            n_genes,
-            scale_l1,
-            scale_kl,
-            scale_spectral,
-            scale_lyapunov,
-            config["gradient_clip_val"],
-            config["swa"],
+    file_dir = config['name_prefix'] #get_full_name(
+        # ''.join(str(i) for i in config["name_prefix"]))
+        # len(LOGO),
+    #     SEED,
+    #     config["lr"],
+    #     n_genes,
+    #     config["scale_l1"],
+    #     config["scale_kl"],
+    #     config["scale_spectral"],
+    #     config["scale_lyapunov"],
+    #     config["gradient_clip_val"],
+    #     config["swa"],
+    # )
+
+    # # If final plot or final model exists: do not overwrite by default
+    # print("Checking Model and Plot files...")
+    # final_file_name = os.path.join(MODEL_PATH, file_dir, "last.ckpt")
+    # final_plot_name = os.path.join(PLOT_PATH, file_dir, "last.png")
+
+    # Save simulated data for inspection and debugging
+    final_data_path = os.path.join(DATA_PATH, file_dir)
+
+    if os.path.isdir(final_data_path):
+        print(final_data_path, "exists")
+    else:
+        print("Creating", final_data_path)
+        os.mkdir(final_data_path)
+
+    np.save(os.path.join(final_data_path,'check_sim_samples.npy'), check_samples)
+    np.save(os.path.join(final_data_path,'check_sim_regimes.npy'), check_sim_regime)
+    np.save(os.path.join(final_data_path,'check_sim_beta.npy'), check_beta)
+    np.save(os.path.join(final_data_path,'check_sim_gt_interv.npy'), check_gt_interv)
+
+    # if (Path(final_file_name).exists() & config["SAVE_PLOT"] & ~config["OVERWRITE"]) | (
+    #     Path(final_plot_name).exists() & config["CHECKPOINTING"] & ~config["OVERWRITE"]
+    # ):
+    #     print("- Files already exists, skipping...")
+    #     pass
+    # else:
+    #     print("- Not all files exist, fitting model...")
+    #     print("  - Deleting dirs")
+    #     # Delete directories of files
+    #     if Path(final_file_name).exists():
+    #         print(f"  - Deleting {final_file_name}")
+    #         # Delete all files in os.path.join(MODEL_PATH, file_name)
+    #         for f in os.listdir(os.path.join(MODEL_PATH, file_dir)):
+    #             os.remove(os.path.join(MODEL_PATH, file_dir, f))
+    #     if Path(final_plot_name).exists():
+    #         print(f"  - Deleting {final_plot_name}")
+    #         for f in os.listdir(os.path.join(PLOT_PATH, file_dir)):
+    #             os.remove(os.path.join(PLOT_PATH, file_dir, f))
+
+    #     print("  - Creating dirs")
+    #     # Create directories
+    #     Path(os.path.join(MODEL_PATH, file_dir)).mkdir(parents=True, exist_ok=True)
+    #     Path(os.path.join(PLOT_PATH, file_dir)).mkdir(parents=True, exist_ok=True)
+
+    hparam_optim = config.get("hyperparameter_optimization", None)
+    if hparam_optim is None:
+        run_training(config, train_loader, validation_loader, 
+                     n_samples_total,
+                     device, gt_interv, n_genes,
+                     train_gene_ko, test_gene_ko, beta,
+                     covariates
+        )
+    else:
+        pruner_config = config["hyperparameter_optimization"].get("pruning", None)
+        if pruner_config is not None:
+            pruner: optuna.pruners.BasePruner = getattr(
+                optuna.pruners, pruner_config["type"]
+            )(**pruner_config["config"])
+        else:
+            pruner = optuna.pruners.NopPruner()
+
+        objective_direction = config["hyperparameter_optimization"].get(
+            "direction", "minimize"
         )
 
-        # If final plot or final model exists: do not overwrite by default
-        print("Checking Model and Plot files...")
-        final_file_name = os.path.join(MODEL_PATH, file_dir, "last.ckpt")
-        final_plot_name = os.path.join(PLOT_PATH, file_dir, "last.png")
-
-        # Save simulated data for inspection and debugging
-        final_data_path = os.path.join(PLOT_PATH, file_dir)
-
-        if os.path.isdir(final_data_path):
-            print(final_data_path, "exists")
+        sampler_config = config["hyperparameter_optimization"].get("sampler", None)
+        if sampler_config is not None:
+            sampler: optuna.samplers._base.BaseSampler = getattr(
+                optuna.samplers, sampler_config["type"]
+            )(**sampler_config["config"])
         else:
-            print("Creating", final_data_path)
-            os.mkdir(final_data_path)
+            sampler = None
 
-        np.save(os.path.join(final_data_path,'check_sim_samples.npy'), check_samples)
-        np.save(os.path.join(final_data_path,'check_sim_regimes.npy'), check_sim_regime)
-        np.save(os.path.join(final_data_path,'check_sim_beta.npy'), check_beta)
-        np.save(os.path.join(final_data_path,'check_sim_gt_interv.npy'), check_gt_interv)
-
-        if (Path(final_file_name).exists() & config["SAVE_PLOT"] & ~config["OVERWRITE"]) | (
-            Path(final_plot_name).exists() & config["CHECKPOINTING"] & ~config["OVERWRITE"]
-        ):
-            print("- Files already exists, skipping...")
-            continue
-        else:
-            print("- Not all files exist, fitting model...")
-            print("  - Deleting dirs")
-            # Delete directories of files
-            if Path(final_file_name).exists():
-                print(f"  - Deleting {final_file_name}")
-                # Delete all files in os.path.join(MODEL_PATH, file_name)
-                for f in os.listdir(os.path.join(MODEL_PATH, file_dir)):
-                    os.remove(os.path.join(MODEL_PATH, file_dir, f))
-            if Path(final_plot_name).exists():
-                print(f"  - Deleting {final_plot_name}")
-                for f in os.listdir(os.path.join(PLOT_PATH, file_dir)):
-                    os.remove(os.path.join(PLOT_PATH, file_dir, f))
-
-            print("  - Creating dirs")
-            # Create directories
-            Path(os.path.join(MODEL_PATH, file_dir)).mkdir(parents=True, exist_ok=True)
-            Path(os.path.join(PLOT_PATH, file_dir)).mkdir(parents=True, exist_ok=True)
-
-        model = BICYCLE(
-            config["lr"],
-            gt_interv,
-            n_genes,
-            n_samples=n_samples_total,
-            lyapunov_penalty=config["lyapunov_penalty"],
-            perfect_interventions=config["perfect_interventions"],
-            rank_w_cov_factor=config["rank_w_cov_factor"],
-            init_tensors=init_tensors if config["USE_INITS"] else None,
-            optimizer=config["optimizer"],
-            optimizer_kwargs = config["optimizer_kwargs"],
-            device=device,
-            scale_l1=scale_l1,
-            scale_lyapunov=scale_lyapunov,
-            scale_spectral=scale_spectral,
-            scale_kl=scale_kl,
-            early_stopping=True if "early_stopping" in config else False,
-            # early_stopping_min_delta=config["early_stopping_min_delta"],
-            # early_stopping_patience=config["early_stopping_patience"],
-            # early_stopping_threshold_mode=config["early_stopping_threshold_mode"],
-            #early_stopping_p_mode=True, # relative percent change
-            x_distribution=config["x_distribution"],
-            x_distribution_kwargs=config["x_distribution_kwargs"],
-            mask=mask,
-            use_encoder=config["use_encoder"],
-            gt_beta=beta,
-            train_gene_ko=train_gene_ko,
-            test_gene_ko=test_gene_ko,
-            use_latents=config["use_latents"],
-            covariates=covariates,
-            n_factors = config["n_factors"],
-            intervention_type = config["intervention_type_inference"],
-            T = config["model_T"],
-            learn_T = config["learn_T"]
+        hpopt_file = Path(os.path.join(LOG_DIR, "hyperparameter_optimization.db"))
+        study = optuna.create_study(
+            study_name=Path(hpopt_file).stem,
+            direction=objective_direction,
+            sampler=sampler,
+            pruner=pruner,
+            storage=f"sqlite:///{hpopt_file}",
+            load_if_exists=True,
         )
-        model.to(device)
-
-        dlogger = DictLogger()
-        loggers = [dlogger]
-
-        callbacks = [
-            RichProgressBar(refresh_rate=1),
-            GenerateCallback(
-                final_plot_name, plot_epoch_callback=config["plot_epoch_callback"], true_beta=beta.cpu().numpy()
+        study.optimize(
+            lambda trial: run_training(
+                config, train_loader, validation_loader, 
+                n_samples_total,
+                device, gt_interv, n_genes,
+                train_gene_ko, test_gene_ko, beta,
+                covariates,
+                trial=trial,
+                trial_id=trial.number,
             ),
-        ]
-        if config["swa"] > 0:
-            callbacks.append(StochasticWeightAveraging(0.01, swa_epoch_start=config["swa"]))
-        if config["CHECKPOINTING"]:
-            Path(os.path.join(MODEL_PATH, file_dir)).mkdir(parents=True, exist_ok=True)
-            callbacks.append(
-                CustomModelCheckpoint(
-                    dirpath=os.path.join(MODEL_PATH, file_dir),
-                    filename="{epoch}",
-                    save_last=True,
-                    save_top_k=1,
-                    verbose=config["VERBOSE_CHECKPOINTING"],
-                    monitor="valid_loss",
-                    mode="min",
-                    save_weights_only=True,
-                    start_after=0,
-                    save_on_train_epoch_end=False,
-                    every_n_epochs=1,
-                )
-            )
-            callbacks.append(MyLoggerCallback(dirpath=os.path.join(MODEL_PATH, file_dir)))
-
-        if "early_stopping" in config:
-            callbacks.append(
-                EarlyStopping_mod(
-                    monitor="avg_valid_loss",
-                    **config["early_stopping"])
-            )
-
-        trainer = pl.Trainer(
-            min_epochs=config["min_epochs_train"],
-            max_epochs=config["n_epochs"],
-            accelerator="gpu",  # if str(device).startswith("cuda") else "cpu",
-            logger=loggers,
-            log_every_n_steps=config["log_every_n_steps"],
-            enable_model_summary=True,
-            enable_progress_bar=True,
-            enable_checkpointing=config["CHECKPOINTING"],
-            check_val_every_n_epoch=config["check_val_every_n_epoch"],
-            devices=[config["GPU_DEVICE"]],  # if str(device).startswith("cuda") else 1,
-            num_sanity_val_steps=0,
-            callbacks=callbacks,
-            gradient_clip_val=config["gradient_clip_val"],
-            default_root_dir=str(MODEL_PATH),
-            gradient_clip_algorithm="value",
-            deterministic=False, #"warn",
+            n_trials=config["hyperparameter_optimization"]["n_trials"],
+            timeout=hparam_optim.get("timeout", None),
+            #n_jobs=25,
         )
 
-        '''print('Optimizing learning rates')
-
-        tuner = Tuner(trainer)
-
-        # Run learning rate finder
-        lr_finder = tuner.lr_find(model)
-
-        # Results can be found in
-        print(lr_finder.results)
-
-        # Plot with
-        fig = lr_finder.plot(suggest=True)
-        fig.save('lr_finder.png')
-
-        # Pick point based on plot, or get suggestion
-        new_lr = lr_finder.suggestion()
-
-        print('Using learning rate of:',new_lr)
-
-        # update hparams of the model
-        model.hparams.lr = new_lr'''
-
-
-        if config["use_latents"] and config["n_epochs_pretrain_latents"] > 0:
-            
-            pretrain_callbacks = [
-                RichProgressBar(refresh_rate=1),
-                GenerateCallback(
-                    str(Path(final_plot_name).with_suffix("")) + '_pretrain', plot_epoch_callback=config["plot_epoch_callback"], true_beta=beta.cpu().numpy()
-                ),                    
-            ]
-            
-            if config["swa"] > 0:
-                pretrain_callbacks.append(StochasticWeightAveraging(0.01, swa_epoch_start=config["swa"]))
-
-            pretrain_callbacks.append(MyLoggerCallback(dirpath=os.path.join(MODEL_PATH, file_dir)))
-
-            if "early_stopping" in config:
-                pretrain_callbacks.append(
-                    EarlyStopping_mod(
-                        monitor="avg_valid_loss",
-                        **config["early_stopping"])
-            )
-            
-            pretrainer = pl.Trainer(
-                min_epochs=config["min_epochs_pretrain_latents"],
-                max_epochs=config["n_epochs_pretrain_latents"],
-                accelerator="gpu",  # if str(device).startswith("cuda") else "cpu",
-                logger=loggers,
-                log_every_n_steps=config["log_every_n_steps"],
-                enable_model_summary=True,
-                enable_progress_bar=True,
-                enable_checkpointing=config["CHECKPOINTING"],
-                check_val_every_n_epoch=config["check_val_every_n_epoch"],
-                devices=[config["GPU_DEVICE"]],  # if str(device).startswith("cuda") else 1,
-                num_sanity_val_steps=0,
-                callbacks=pretrain_callbacks,
-                gradient_clip_val=config["gradient_clip_val"],
-                default_root_dir=str(MODEL_PATH),
-                gradient_clip_algorithm="value",
-                deterministic=False, #"warn",
-            )
-            
-            print('PRETRAINING LATENTS!')
-            start_time = time.time()
-            model.train_only_likelihood = True
-            # assert False
-            pretrainer.fit(model, train_loader, validation_loader)
-            end_time = time.time()
-            model.train_only_likelihood = False
-
-        # try:
-        start_time = time.time()
-        # assert False
-        trainer.fit(model, train_loader, validation_loader)
-        end_time = time.time()
-        print(f"Training took {end_time - start_time:.2f} seconds")
-
-        plot_training_results(
-            trainer,
-            model,
-            model.beta.detach().cpu().numpy(),
-            beta,
-            scale_l1,
-            scale_kl,
-            scale_spectral,
-            scale_lyapunov,
-            final_plot_name,
-            callback=False,
+        print(f"Number of finished trials: {len(study.trials)}")
+        trial = study.best_trial
+        print(f'Best trial: {trial.number}')
+        print(
+            #f'  Mean {config["model"]["config"]["metrics"]["objective"]}: '
+            f"Mean neg_log_likelihood + loss_l1 + z_kl + loss_spectral + loss_lyapunov : {trial.value}"
         )
-        # except Exception as e:
-        #     # Write Exception to file
-        #     report_path = os.path.join(MODEL_PATH, file_dir, "report.yaml")
-        #     # Write yaml
-        #     with open(report_path, "w") as outfile:
-        #         yaml.dump({"exception": str(e)}, outfile, default_flow_style=False)
+        print(f"  Params:\n{pformat(trial.params)}")
+
 
 if __name__ == "__main__":
     cli()
