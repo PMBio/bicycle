@@ -10,11 +10,11 @@ We recommend to use [mamba](https://mamba.readthedocs.io/en/latest/installation/
 
 1. Create a new environment:
    ```shell
-   mamba env create -f environment.yml -n bicycle
+   mamba env create -f environment.yaml -n bicycle
    ```
    The environment installs PyTorch 2.0. Alternatively, you can also install the environment into a local folder via
    ```shell
-   mamba env create -f environment.yml --prefix /path/to/local/folder/bicycle
+   mamba env create -f environment.yaml --prefix /path/to/local/folder/bicycle
    ```
 2. Activate the environment
    ```shell
