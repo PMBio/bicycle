@@ -496,7 +496,9 @@ class BICYCLE(pl.LightningModule):
             B_broadcasted = B_broadcasted.squeeze()
             alphas_broadcasted = alphas_broadcasted.squeeze()
 
-        x_bar = torch.bmm(torch.linalg.inv(B_broadcasted), alphas_broadcasted[:, :, None]).squeeze()
+        x_bar = torch.linalg.solve(B_broadcasted, alphas_broadcasted[:, :, None]).squeeze()
+        # TODO: Use torch.linalg.solve_ex() once it is no longer experimental in pytorch:
+        # x_bar = torch.linalg.solve_ex(B_broadcasted, alphas_broadcasted[:, :, None])[0].squeeze()
         return x_bar
 
     def get_mvn_normal(self, B, alphas, sim_regime, sigmas):
