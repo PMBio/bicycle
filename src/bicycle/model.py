@@ -11,8 +11,25 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from bicycle.utils.training import EarlyStopperTorch, lyapunov_direct
 
-
+# not implemented
 def init_weights(m):
+    """
+    Initializes the weights of a given neural network layer using Xavier normal initialization
+    and sets the biases to zero if they exist.
+
+    Parameters:
+    m (torch.nn.Module): The neural network layer to initialize. This function specifically
+                         targets layers of type nn.Conv2d, nn.Linear, and nn.ConvTranspose2d.
+
+    Behavior:
+    - For the weights of the specified layer types, Xavier normal initialization is applied
+      with a gain of 0.1.
+    - If the layer has a bias term, it is initialized to zero.
+
+    Note:
+    - Xavier initialization is designed to keep the scale of gradients roughly the same
+      in all layers, which can help with training stability.
+    """
     if isinstance(m, (nn.Conv2d, nn.Linear, nn.ConvTranspose2d)):
         torch.nn.init.xavier_normal_(m.weight, gain=0.1)
         if m.bias is not None:
@@ -21,6 +38,39 @@ def init_weights(m):
 
 
 class Encoder(nn.Module):
+    """
+    Encoder module for a Variational Autoencoder (VAE) or similar architecture.
+
+    This class encodes input data into a latent space representation, producing
+    both the mean (`mu`) and variance (`variance`) of the latent distribution.
+    Used to sample z later, using the reparameterization trick.
+
+    Attributes:
+        z_dim (int): Dimensionality of the latent space.
+        net (nn.Sequential): A neural network that processes the input data
+            and outputs the parameters of the latent distribution.
+
+    Args:
+        x_dim (int): Dimensionality of the input data.
+        z_dim (int): Dimensionality of the latent space.
+        n_cond (int): Number of conditional variables to include in the input.
+        act_fn (object, optional): Activation function to use in the network.
+            Defaults to `nn.GELU`.
+        hid_dim (int, optional): Dimensionality of the hidden layers in the network.
+            Defaults to 500.
+
+    Methods:
+        forward(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+            Processes the input tensor `x` and returns the mean (`mu`) and
+            variance (`variance`) of the latent distribution.
+
+    Example:
+        >>> encoder = Encoder(x_dim=100, z_dim=10, n_cond=5)
+        >>> x = torch.randn(32, 105)  # Batch of 32 samples with 100 features + 5 conditions
+        >>> mu, variance = encoder(x)
+        >>> print(mu.shape, variance.shape)
+        torch.Size([32, 10]) torch.Size([32, 10])
+    """
     def __init__(self, x_dim: int, z_dim: int, n_cond: int, act_fn: object = nn.GELU, hid_dim: int = 500):
         super().__init__()
         self.z_dim = z_dim
@@ -44,6 +94,38 @@ class Encoder(nn.Module):
 
 
 class Omega_Iterative(pl.LightningModule):
+    """
+    Omega_Iterative is a PyTorch Lightning module designed to optimize a matrix `omega` 
+    using Lyapunov stability principles. The class models a system of equations 
+    involving parameters `alpha`, `beta`, and `sigma`, and minimizes the Lyapunov loss 
+    during training.
+    Optimizes \omega to fit the latent normal distribution of z. Utilizes continuous lyapunov equation and assumes steady state.
+
+    Attributes:
+        alpha (torch.Tensor): A tensor representing the alpha parameter, detached and moved to the specified device.
+        beta (torch.Tensor): A tensor representing the beta matrix (gene gene interactions), detached and moved to the specified device.
+        sigma (torch.Tensor): A tensor representing the sigma parameter, detached and moved to the specified device.
+        n_genes (int): The number of genes, derived from the shape of the alpha tensor.
+        lr (float): The learning rate for the optimizer. Default is 1e-2.
+        sigma_min (float): The minimum value for sigma. Default is 1e-3.
+        omega (torch.nn.Parameter): A trainable parameter matrix initialized with random values.
+        B (torch.Tensor): A matrix derived from the beta matrix, used in Lyapunov computations.
+
+    Methods:
+        configure_optimizers():
+            Configures the optimizer for training. Uses Adam optimizer with the specified learning rate.
+
+        training_step(batch):
+            Computes the Lyapunov loss for a given training batch. The loss is the squared difference 
+            between the left-hand side and right-hand side of the Lyapunov equation, normalized by the 
+            square of the number of genes.
+
+        lyapunov_lhs():
+            Computes the left-hand side of the Lyapunov equation as `B @ omega + (B @ omega).T`.
+
+        lyapunov_rhs():
+            Computes the right-hand side of the Lyapunov equation as `sigma @ sigma.T`.
+    """
     def __init__(self, alpha, beta, sigma, lr=1e-2, sigma_min=1e-3, device="cpu"):
 
         super().__init__()
@@ -60,6 +142,7 @@ class Omega_Iterative(pl.LightningModule):
 
         self.omega = torch.nn.Parameter(0.1 * torch.randn((self.n_genes, self.n_genes), device=device))
 
+        # calculate B from beta: 1. set \beta diagonal to 0 (no self regulations) 2. B = I - \beta^T
         self.B = torch.eye(self.n_genes, device=self.device) - (
             1.0 - torch.eye(self.n_genes, device=self.device)
         ) * beta.transpose(0, 1)
@@ -85,7 +168,7 @@ class BICYCLE(pl.LightningModule):
     def __init__(
         self,
         lr,
-        gt_interv,
+        gt_interv,  #ground truth of interventions?
         n_genes,
         n_samples,
         lyapunov_penalty=True,
@@ -112,7 +195,7 @@ class BICYCLE(pl.LightningModule):
         test_gene_ko: list = None,
         use_latents: bool = True,
         covariates: Tensor = None,
-        n_factors: int = 0,
+        n_factors: int = 0,                 #determines factorization?
         intervention_type: str = "dCas9",
         sigma_min: float = 1e-3,
         T: float = 1.0,
@@ -153,7 +236,7 @@ class BICYCLE(pl.LightningModule):
         self.mask = mask
         self.use_encoder = use_encoder
         self.use_latents = use_latents
-        self.n_factors = n_factors
+        self.n_factors = n_factors      # ==0
         self.intervention_type = intervention_type
         self.sigma_min = sigma_min
         self.train_only_likelihood = train_only_likelihood
@@ -223,7 +306,8 @@ class BICYCLE(pl.LightningModule):
                 self.beta_val = torch.nn.Parameter(0.001 * torch.randn((self.n_entries,)))
             else:
                 raise NotImplementedError("Combination of factorization and masking not implemented yet.")
-
+            
+        # Variables describing *PERTURBED* mechanisms
         if not self.perfect_interventions:
             if self.mask is None:
                 if self.n_factors == 0:
@@ -253,12 +337,27 @@ class BICYCLE(pl.LightningModule):
                 else:
                     raise NotImplementedError("Combination of factorization and masking not implemented yet.")
 
+        # Initialize alpha (i. e. net basal transcription rate) for each gene
         # Must be positive
         self.alpha = torch.nn.Parameter(0.001 * torch.exp(torch.randn((n_genes,))))
         self.alpha_p = torch.nn.Parameter(0.001 * torch.exp(torch.randn((n_genes,))))
+        # Initialize sigma (i.e. effect of Wiener Process on transcription) for each gene
+        # Must be positive
         self.sigma = torch.nn.Parameter(1.0 * torch.exp(torch.randn((n_genes,))))
         self.sigma_p = torch.nn.Parameter(1.0 * torch.exp(torch.randn((n_genes,))))
 
+
+        if init_tensors is not None:
+            with torch.no_grad():
+                print("Initializing parameters from data")
+                if "alpha" in self.init_tensors:
+                    self.alpha.data = self.init_tensors["alpha"]
+                if "w_cov_factor" in self.init_tensors:
+                    self.w_cov_factor.data = self.init_tensors["w_cov_factor"]
+                if "w_cov_diag" in self.init_tensors:
+                    self.w_cov_diag.data = self.init_tensors["w_cov_diag"]
+
+# Not implemented? Curently not used
         if learn_T:
             self.T = torch.nn.Parameter(torch.tensor(T))
         else:
@@ -280,20 +379,13 @@ class BICYCLE(pl.LightningModule):
                     )
                 )
             )
+# for factorization?
             self.w_cov_factor = torch.nn.Parameter(
                 0.1 * torch.randn((self.n_contexts, n_genes, rank_w_cov_factor))
             )
 
-        if init_tensors is not None:
-            with torch.no_grad():
-                print("Initializing parameters from data")
-                if "alpha" in self.init_tensors:
-                    self.alpha.data = self.init_tensors["alpha"]
-                if "w_cov_factor" in self.init_tensors:
-                    self.w_cov_factor.data = self.init_tensors["w_cov_factor"]
-                if "w_cov_diag" in self.init_tensors:
-                    self.w_cov_diag.data = self.init_tensors["w_cov_diag"]
 
+# Not implemented? (No further reference). Dead code
         if gt_beta is not None:
             self.gt_beta = gt_beta
         if train_gene_ko is not None:
@@ -301,7 +393,7 @@ class BICYCLE(pl.LightningModule):
         if test_gene_ko is not None:
             self.test_gene_ko = test_gene_ko
 
-        # Preprocess covariates
+        # Initialization of covariates and coefficients. Covariate preprocessing not implemented/deprecated
         if covariates is not None:
 
             print("Covariates shape:", covariates.shape)
@@ -328,6 +420,35 @@ class BICYCLE(pl.LightningModule):
             self.covariates = None
 
     def configure_optimizers(self):
+        """
+        Configures and returns the optimizer and learning rate scheduler for the model.
+
+        This method selects the optimizer based on the `self.optimizer` attribute and 
+        applies the specified learning rate (`self.lr`) and additional optimizer-specific 
+        keyword arguments (`self.optimizer_kwargs`). It supports the following optimizers:
+        
+        - "adam": Uses `torch.optim.Adam`.
+        - "rmsprop": Uses `torch.optim.RMSprop`.
+        - "adamlrs": Uses `torch.optim.Adam` with a learning rate scheduler 
+          (`torch.optim.lr_scheduler.ReduceLROnPlateau`).
+
+        Returns:
+            - If `self.optimizer` is "adam" or "rmsprop", returns an instance of the 
+              corresponding optimizer.
+            - If `self.optimizer` is "adamlrs", returns a dictionary containing:
+                - "optimizer": The Adam optimizer instance.
+                - "lr_scheduler": The ReduceLROnPlateau scheduler instance.
+                - "monitor": The metric to monitor for the scheduler ("train_loss").
+
+        Notes:
+            - The "adamlrs" option includes a learning rate scheduler that reduces the 
+              learning rate when the monitored metric stops improving. The monitored 
+              metric is currently set to "train_loss".
+            - Ensure that `self.optimizer_kwargs` contains valid arguments for the 
+              selected optimizer.
+            - The `FIXME` comment indicates that the monitored metric ("train_loss") 
+              should be verified for correctness.
+        """
         print("Using optimizer_kwargs:", self.optimizer_kwargs)
         if self.optimizer == "adam":
             return optim.Adam(self.parameters(), lr=self.lr, **self.optimizer_kwargs)
@@ -346,21 +467,57 @@ class BICYCLE(pl.LightningModule):
             }
 
     def get_updated_states(self):
-        iv_a = (1 - self.gt_interv).T
+        """
+        Updates beta, alpha and sigma matrices based on intervention ground truth, perturbation type and configuration.
 
+        Returns:
+            tuple: A tuple containing:
+                - alphas (torch.Tensor): The updated alpha values, which represent 
+                  the initial transcription rate for genes in perturbed cells.
+                - betas (torch.Tensor): The updated beta values, which represent 
+                  the gene-to-gene interactions for each perturbation scenario.
+                - B (torch.Tensor): A matrix derived from betas. B = I - betas^T
+                - sigmas (torch.Tensor): The updated sigma values, which represent 
+                  the variance or uncertainty in the model for each perturbation scenario.
+
+        Raises:
+            NotImplementedError: If the intervention type is not "Cas9" or "dCas9".
+            NotImplementedError: If a combination of factorization and masking is 
+                                 attempted, which is not yet implemented.
+
+        Notes:
+            - The function handles two intervention types: "Cas9" and "dCas9".
+            - For non-factorizing cases, beta values are directly updated based on 
+              the intervention type and ground truth interventions.
+            - For factorizing cases, beta values are computed as a product of 
+              gene-to-factor and factor-to-gene matrices, with adjustments for 
+              interventions.
+            - Diagonal elements of beta matrices are set to zero to inhibit 
+              self-regulation.
+            - The function uses PyTorch operations for tensor manipulation, 
+              including `torch.einsum` for efficient computation of matrix 
+              products.
+        """
+
+        # Resets beta to masked beta_val if masked not None
         if self.mask is not None:
             self.beta = torch.zeros((self.n_genes, self.n_genes), device=self.device)
             self.beta[self.beta_idx[0], self.beta_idx[1]] = self.beta_val.to(self.device)
             self.beta_p = torch.zeros((self.n_genes, self.n_genes), device=self.device)
             self.beta_p[self.beta_idx[0], self.beta_idx[1]] = self.beta_p_val.to(self.device)
 
+        # Defines iv_a as transformed ground truth of interventions. With interventions as 0 and rest as 1
+        iv_a = (1 - self.gt_interv).T
         iv_a = iv_a.to(self.device)
 
+        # for non factorizing case: initializes betas as merge of beta and beta_p with gt_interv as mask
         if self.n_factors == 0:
+            # in case of interference
             if self.intervention_type == "dCas9":
-                betas = iv_a[:, None, :] * self.beta.to(self.device) + (1 - iv_a)[
+                betas = iv_a[:, None, :] * self.beta.to(self.device) + (1 - iv_a)[  
                     :, None, :
-                ] * self.beta_p.to(self.device)
+                ] * self.beta_p.to(self.device)# beta pert updated
+            # in case of knockout/knockdown
             elif self.intervention_type == "Cas9":
                 betas = iv_a[:, :, None] * self.beta.to(self.device) + (1 - iv_a)[
                     :, :, None
@@ -370,24 +527,33 @@ class BICYCLE(pl.LightningModule):
         else:
             if self.mask is None:
                 if self.intervention_type == "dCas9":
+                    # merge factor to gene matrix
                     factor2genes = iv_a[:, None, :] * self.factor2gene.to(self.device) + (1 - iv_a)[
                         :, None, :
                     ] * self.factor2gene_p.to(self.device)
+                    # initialize betas as gene to gene matrix 
                     betas = torch.einsum("bij,bjk->bik", self.gene2factor[None, :, :], factor2genes)
+                    # set betas diagonale to zero to inhibit self-regulation
                     betas_diag = torch.diagonal(betas, offset=0, dim1=-2, dim2=-1)
                     betas_diag[:] = 0.0
 
+                    # update self.beta to gene-gene matrix and set diagonal to 0
                     self.beta = torch.einsum("ij,jk->ik", self.gene2factor, self.factor2gene)
                     beta_diag = torch.diagonal(self.beta, offset=0, dim1=-2, dim2=-1)
                     beta_diag[:] = 0
+
                 elif self.intervention_type == "Cas9":
+                    # merge factor to gene matrix
                     gene2factors = iv_a[:, :, None] * self.gene2factor.to(self.device) + (1 - iv_a)[
                         :, :, None
                     ] * self.gene2factor_p.to(self.device)
+                    # initialize betas as gene to gene matrix 
                     betas = torch.einsum("bij,bjk->bik", gene2factors, self.factor2gene[None, :, :])
+                    # set betas diagonale to zero to inhibit self-regulation
                     betas_diag = torch.diagonal(betas, offset=0, dim1=-2, dim2=-1)
                     betas_diag[:] = 0.0
 
+                    # update self.beta to gene-gene matrix and set diagonal to 0
                     self.beta = torch.einsum("ij,jk->ik", self.gene2factor, self.factor2gene)
                     beta_diag = torch.diagonal(self.beta, offset=0, dim1=-2, dim2=-1)
                     beta_diag[:] = 0
@@ -415,6 +581,7 @@ class BICYCLE(pl.LightningModule):
         else:
             raise NotImplementedError("Currently only Cas9 and dCas9 are supported as intervention_type.")
 
+        # initializes B as minus beta transposed with diagonal values of 1
         B = torch.eye(self.n_genes, device=self.device)[None, :, :] - (
             1.0 - torch.eye(self.n_genes, device=self.device)
         )[None, :, :] * betas.transpose(1, 2)
@@ -422,6 +589,15 @@ class BICYCLE(pl.LightningModule):
         return alphas, betas, B, sigmas
 
     def lyapunov_lhs(self, B):
+        """
+        Computes the left-hand side of the time continuous lyapunov equation.
+
+        parameters:
+            - B: matrix with dimensions (batch, genes, genes). Equates to $$I_G - \beta^T$$.
+
+        Notes:
+            - omega factorized with sigma_min to avoid vanishing gradient.
+        """
         mat = B @ (
             torch.diag_embed(self.pos(self.w_cov_diag) + self.sigma_min)
             + self.w_cov_factor @ self.w_cov_factor.transpose(1, 2)
@@ -429,6 +605,15 @@ class BICYCLE(pl.LightningModule):
         return mat + mat.transpose(1, 2)
 
     def lyapunov_rhs(self, sigmas):
+        """
+        Computes right-hand side of the time continuous lyapunov equation.
+
+        parameters:
+            - sigmas: Matrix with dimensions (batch, genes). Sigma represents the effect of the Wiener Process on the transcription of each gene. 
+
+        returns: 
+            - sigmas @ sigmas^T
+        """
         return torch.bmm(sigmas, sigmas.transpose(1, 2))
 
     # def compute_normalisations(self, log_likelihood, z_kl, l1_loss, spectral_loss, loss_lyapunov):
@@ -453,6 +638,21 @@ class BICYCLE(pl.LightningModule):
     #     self._normalisation_computed = True
 
     def scale_losses(self, z_kl, l1_loss, loss_spectral=None, loss_lyapunov=None):
+        """
+        Function to scale the loss outputs. 
+
+        inputs:
+            - z_kl
+            - l1_loss
+            - loss_spectral (default None)
+            - loss_lyapunov (default None)
+
+        output:
+            - tuple: (scaled kl_loss, scaled l1_loss, scaled spectral loss, scaled lyapunov loss)
+
+        Notes:
+            - Returns None for scaled spectral and/or lyapunov loss if the respective input was None.
+        """
         l1_loss = self.scale_l1 * l1_loss
         z_kl = self.scale_kl * z_kl
 
@@ -464,6 +664,23 @@ class BICYCLE(pl.LightningModule):
         return z_kl, l1_loss, loss_spectral, loss_lyapunov
 
     def split_samples(self, samples, sim_regime, sample_idx, data_category):
+        """
+        Splits a samples, sim_regime and sample_idx into training, validation and testing set according to data_category.
+        
+        Arguments:
+            - samples
+            - sim_regime: simulation regime
+            - sample_idx
+            - data_category: subscriptable filled with 1, 2 and 3 (1:train, 2: validate, 3: test)
+            All arguments must have the same length and must be subscriptable.
+
+        Output: 
+            tuple: (
+            sample_train, sim_regime_train, sample_idx_train,
+            sample_validate, sim_regime_validate, sample_idx_validate,
+            sample_test, sim_regime_test, sample_idx_test
+            )
+        """
         # Split all rows according to is_valid_data
         samples_train = samples[data_category == 0]
         sim_regime_train = sim_regime[data_category == 0]
@@ -488,18 +705,46 @@ class BICYCLE(pl.LightningModule):
         )
 
     def get_x_bar(self, B, alphas, sim_regime):
+        """
+        Computes x_bar = B^(-1) @ alpha.
+
+        Notes:
+            - sim_regime is used to rearrange B and alpha through indexing.
+            - x_bar can be later used as the mean for the latent multivariate normal distribution of gene experession.
+        """
         # Broadcast arrays to batch_shape
         B_broadcasted = B[sim_regime]
         alphas_broadcasted = alphas[sim_regime]
 
         if B.shape[0] == 1:
+            # remove all dimensions==1
             B_broadcasted = B_broadcasted.squeeze()
             alphas_broadcasted = alphas_broadcasted.squeeze()
 
-        x_bar = torch.bmm(torch.linalg.inv(B_broadcasted), alphas_broadcasted[:, :, None]).squeeze()
+        x_bar = torch.linalg.solve(B_broadcasted, alphas_broadcasted[:, :, None]).squeeze()     # is x_bar equivalent to z_bar in the paper?
+        # TODO: Use torch.linalg.solve_ex() once it is no longer experimental in pytorch:
+        # x_bar = torch.linalg.solve_ex(B_broadcasted, alphas_broadcasted[:, :, None])[0].squeeze()
         return x_bar
 
     def get_mvn_normal(self, B, alphas, sim_regime, sigmas):
+        """
+        Compute the latent multivariate normal distribution of gene expression. E.g. solution of lyapunov equation.
+
+        parameters:
+            - B: equates to I - beta^T
+            - alphas: basal gene transcription rate matrix
+            - sim_regime: Index used for restructuring of matrices
+            - sigmas: matrix to represent the magrnitude of random fluctuations (Wiener Process).
+
+        output:
+            - torch.distributions.MultiVariateNormal
+            or
+            - torch.distributions.LowRankMultiVariateNormal
+
+        Notes:
+            - See page 215f in the paper for more info.
+        """
+
         x_bar = self.get_x_bar(B, alphas, sim_regime)
 
         if self.lyapunov_penalty:
@@ -535,10 +780,26 @@ class BICYCLE(pl.LightningModule):
             return torch.distributions.MultivariateNormal(x_bar, covariance_matrix=omegas[sim_regime])
 
     def _get_posterior_dist(self, sample_idx, samples, sim_regime):
+        """
+        Function to approximate the latent posterior distribution of x: q(z|x).
+
+        Parameters:
+            - sample_idx
+            - samples: Data tensor with dimensions (batches, genes, cells). Equivalent to x in the paper.
+            - sim_regime
+
+        Output:
+            - torch.distributions.MultivariateNormal
+
+        Notes:
+            - Uses the self.use_encoder attribute to determine the method.
+                - If self.use_encoder: Uses a neural network to infer mean and variance of the distribution.
+                - Else: Uses the self.z_loc and self.z_scale + self.sigma_min attributes as mean and variance 
+        """
         if self.use_encoder:
             gt_nonzeros = self.gt_nonzeros.to(self.device)
 
-            if gt_nonzeros.shape[1] > 1:
+            if gt_nonzeros.shape[1] > 1:            # if statement in squeeze already included (removes all dimensions ==1)
                 ohes = gt_nonzeros[:, sim_regime].T
             else:
                 ohes = gt_nonzeros[:, sim_regime].squeeze().T
@@ -614,6 +875,16 @@ class BICYCLE(pl.LightningModule):
         return spectral_loss
 
     def training_step(self, batch, batch_idx):
+        """
+        Overrides the pyTorch Lightning LightningModule.training_step function.
+
+        Args:
+            - batch: Output of the DataLoader. Should contain: samples, sim_regime, sample_idx, data_category
+        
+        Outputs:
+            - loss: loss for training Bicycle
+        
+        """
         kwargs = {"on_step": False, "on_epoch": True}
         prefix = "train" if self.training else "valid"
 
@@ -642,6 +913,7 @@ class BICYCLE(pl.LightningModule):
         if (len(samples_train) == 0) & self.training:
             return None
 
+        # compute perturbed model 
         alphas, _, B, sigmas = self.get_updated_states()
 
         if self.train_only_latents:
