@@ -205,11 +205,78 @@ class BICYCLE(pl.LightningModule):
         mask_genes: list = [],
     ):
         """
+        Initializes the Bicycle model as a subclass of pl.LightningModule.  
+        Please cite: Rohbeck et al., "Bicycle: Intervention-Based Causal Discovery with Cycles”
+
         Parameters
         ----------
+        lr: float
+            learning rate
+        gt_interv: torch.Tensor
+            ground truth of the intervention
+        n_genes: int
+            number of genes
+        n_samples: int
+            number of cells/samples
+        lyapunov penalty: bool
+            True if the lyapunov function should be used to determine the loss.
+        perfect_interventions: bool
+            Determines if interventions/perturbations should be treated as 100% knockout.
+        rank_omega_cov_factor: int
+            Determines the third dimension of the covariance matrix omega. (batch, n_genes, rank_omega_cov_factor)
+        optimizer: str
+            Determines the optimizer to be used. Options available:
+            - "adam": Uses `torch.optim.Adam`.
+            - "rmsprop": Uses `torch.optim.RMSprop`.
+            - "adamlrs": Uses `torch.optim.Adam` with a learning rate scheduler 
+              (`torch.optim.lr_scheduler.ReduceLROnPlateau`).
+        optimizer_kwargs:
+            kwargs to use for the selected optimizer function.
+        device: str
+        scale_l1: float
+            Value to scale the loss.
+        scale_spectral: float
+            Value to scale the loss.
+        scale_lyapunov: float
+            Value to scale the loss.
+        x_distribution: str
+            Distribution to compute the NLL loss by. 
+            Currently supported are: "Poisson", "Normal", "NormalNormal", "Multinomial".
+        init_tensors: Dict
+            Initial values for the model parameters. Supported keys:
+            "alpha": torch.Tensor,
+            "beta": torch.Tensor,
+            "w_cov_factor": torch.Tensor
+            "w_cov_diag": torch.Tensor.
+        mask: torch.Tensor
+            Matrix to mask gene interactions. Must be of shape (n_genes, n_genes).
+        mask_genes: list
+            Gene indexes to not be used in calculating the NLL loss.
+        use_encoder: bool
+            Determines if the Encoder() module should be used to estimate the mean and variance of the posterior latent distribution q(z|x).
+        gt_beta: torch.Tensor
+            Ground truth gene gene interaction matrix, to be used in benchmarking the model.
+        train_gene_ko: list
+            List of knocked-out genes, to be used in benchmarking.
+        test_gene_ko: list
+            List of knocked-out genes, to be used in benchmarking.
+        use_latents: bool
+            Determines if latent representations of the sample data x into latent data z should be used.
         covariates: torch.Tensor
             Covariates to be used in the model. If None, no covariates are used.
             Must be of shape (cells, n_covariates).
+        n_factors: int
+            Number of factors to be used in factorization of beta. If n_factors = 0 no factorization is used.
+        intervention_type: str
+            Type of intervention, that was used for perturbation. Currently implemented: "Cas9", "dCas9".
+        sigma_min: float
+            Minimum value of sigma in the Ornstein-Uhlenbeck process, that is used to model gene expression.
+        train_only_likelihood: bool
+            If True, only NLL loss is used to train the model.
+        train_only_latents: bool
+            If True all data is treated as training data and only latent scale and location are optimized.
+
+            
         """
         super().__init__()
 
