@@ -14,6 +14,10 @@ class _History(dict):
 
 
 class DictLogger(Logger):
+    """
+    Class for logging model hyperparameters and metrics. 
+    Subclasses the pytorch_lightning.loggers Logger class.
+    """
     def __init__(self, version=None):
         self._version = version
         self.experiment = None

@@ -258,7 +258,7 @@ class BICYCLE(pl.LightningModule):
         mask_genes: list = [],
     ):
         """
-        Initializes the Bicycle model as a subclass of pl.LightningModule.  
+        Initializes the Bicycle model as a subclass of pl.LightningModule.
         Please cite: Rohbeck et al., "Bicycle: Intervention-Based Causal Discovery with Cycles”
 
         Args:
@@ -266,33 +266,34 @@ class BICYCLE(pl.LightningModule):
             gt_interv: torch.Tensor object, representing the ground truth of the intervention.
             n_genes: int for the number of genes
             n_samples: int for the number of cells/samples
-            lyapunov penalty: 
+            lyapunov penalty:
                 bool that specifies if the lyapunov function should be used to determine the loss.
-            perfect_interventions: 
+            perfect_interventions:
                 bool to determine if interventions/perturbations should be treated as 100% knockout.
-            rank_omega_cov_factor: 
-                int that determines the third dimension of the covariance matrix omega. 
+            rank_omega_cov_factor:
+                int that determines the third dimension of the covariance matrix omega.
                 Dimentions of omega are(batch, n_genes, rank_omega_cov_factor)
             optimizer: Determines the optimizer to be used. Options available:
                 - "adam": Uses `torch.optim.Adam`.
                 - "rmsprop": Uses `torch.optim.RMSprop`.
-                - "adamlrs": Uses `torch.optim.Adam` with a learning rate scheduler 
+                - "adamlrs": Uses `torch.optim.Adam` with a learning rate scheduler
                   (`torch.optim.lr_scheduler.ReduceLROnPlateau`).
             optimizer_kwargs: **kwargs to use for the selected optimizer function.
             scale_l1: float to scale the loss.
             scale_spectral: float to scale the loss.
             scale_lyapunov: float to scale the loss.
-            x_distribution: Distribution to compute the NLL loss by. 
+            x_distribution: Distribution to compute the NLL loss by.
                 Currently supported are: "Poisson", "Normal", "NormalNormal", "Multinomial".
-            init_tensors: Dict containing initial values for the model parameters. 
+            init_tensors: Dict containing initial values for the model parameters.
                 Supported keys: "alpha": torch.Tensor, "beta": torch.Tensor,
                 "w_cov_factor": torch.Tensor, "w_cov_diag": torch.Tensor.
+                Only beta will be initialized as learning parameter.
             mask: torch.Tensor
                 Matrix to mask gene interactions. Must be of shape (n_genes, n_genes).
             mask_genes: list
                 Gene indexes to not be used in calculating the NLL loss.
             use_encoder: bool
-                Determines if the Encoder() module should be used to estimate the mean and 
+                Determines if the Encoder() module should be used to estimate the mean and
                 variance of the posterior latent distribution q(z|x).
             gt_beta: torch.Tensor
                 Ground truth gene gene interaction matrix, to be used in benchmarking the model.
@@ -301,7 +302,7 @@ class BICYCLE(pl.LightningModule):
             test_gene_ko: list
                 List of knocked-out genes, to be used in benchmarking.
             use_latents: bool
-                Determines if latent representations of the sample data x into latent data z 
+                Determines if latent representations of the sample data x into latent data z
                 should be used.
             covariates: torch.Tensor
                 Covariates to be used in the model. If None, no covariates are used.
@@ -313,12 +314,12 @@ class BICYCLE(pl.LightningModule):
                 Type of intervention, that was used for perturbation. Currently implemented:
                 "Cas9", "dCas9".
             sigma_min: float
-                Minimum value of sigma in the Ornstein-Uhlenbeck process, that is used to model 
+                Minimum value of sigma in the Ornstein-Uhlenbeck process, that is used to model
                 gene expression.
             train_only_likelihood: bool
                 If True, only NLL loss is used to train the model.
             train_only_latents: bool
-                If True all data is treated as training data and only latent scale and location 
+                If True all data is treated as training data and only latent scale and location
                 are optimized.
 
             
@@ -504,6 +505,8 @@ class BICYCLE(pl.LightningModule):
                 )
             )
 
+        # initialize initial parameters with .data attribute
+        # bypasses autograd
         if init_tensors is not None:
             with torch.no_grad():
                 print("Initializing parameters from data")

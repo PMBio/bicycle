@@ -27,6 +27,13 @@ def create_data(
     library_size_range=[5000, 25000],
     **graph_kwargs,
 ):
+    """
+    Function to create a synthetic single cell RNA-seq dataset with perturbations.
+
+    Returns:
+    tuple: (gt_dyn, intervened_variables, samples, gt_interv, sim_regime, beta)
+
+    """
     N = n_genes
 
     # We start counting gene ids from 0, 1, ..., N-1
@@ -341,6 +348,12 @@ def create_loaders(
     covariates=None,
     **kwargs,
 ):
+    """
+    Function to create dataloaders for training the bicycle model.
+
+    Returns:
+    tuple: (train_loader, validation_loader, test_loader, covariates)
+    """
     samples_interventions = sim_regime.long().to(torch.int64)
 
     if len(test_gene_ko) > 0:
@@ -555,6 +568,24 @@ def get_diagonal_mask(n_genes, device):
 
 
 def compute_inits(init_data, rank_w_cov_factor, n_contexts, normalized=False):
+    """
+    Function to compute initial tensors for the bicycle model.
+
+    Deprecated: Currently not initializing beta! Only beta is used in model!
+
+    Args:
+    init_data: iterable, that contains samples, sim_regime, sample_idx, data_category.
+        Corresponds to pytorchs DataLoader.dataset .
+    rank_w_cov_factor: int that is the minimum of [number of TFs, n_genes-1]
+    n_contexts: int (number of contexts)
+
+    Returns:
+    Dict("alpha": alpha,
+        "w_cov_factor": w_cov_factor,
+        "w_cov_diag": w_cov_diag,)
+    
+    """
+
     samples, sim_regime, sample_idx, data_category = init_data[:]
     print("Initializing parameters from data")
 
@@ -602,6 +633,12 @@ def compute_inits(init_data, rank_w_cov_factor, n_contexts, normalized=False):
 def generate_weighted_graph(
     graph_type, nodes, edge_assignment, make_contractive=True, raise_if_not_cycle=True, device="cpu", **kwargs
 ):
+    """
+    Generates a GRN-like weighted graph.
+    
+    Returns:
+        Adjacency matrix as torch.Tensor with dimensions (genes, genes)
+    """
     def scale(g, edge_weights, p_edge_weights):
         if edge_weights is not None:
             if isinstance(edge_weights, (float, int)):
