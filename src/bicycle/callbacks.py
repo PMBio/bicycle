@@ -78,11 +78,11 @@ class GenerateCallback(pl.Callback):
         Initializes the GenerateCallback function for plotting training results during training.
 
         Args:
-        file_name_plot: str containing the file_name for the saved plots.
-            Can be given with or without suffix.
-        plot_epoch_callback: int specifying the callback intervall.
-        true_beta: None|torch.Tensor containing the ground truth gene adjacency matrix.
-        labels: iterable containing gene_labels.
+            file_name_plot: str containing the file_name for the saved plots.
+                Can be given with or without suffix.
+            plot_epoch_callback: int specifying the callback intervall.
+            true_beta: None|torch.Tensor containing the ground truth gene adjacency matrix.
+            labels: iterable containing gene_labels.
         """
         super().__init__()
         self.plot_epoch_callback = plot_epoch_callback

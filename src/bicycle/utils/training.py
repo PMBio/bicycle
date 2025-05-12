@@ -41,7 +41,7 @@ def lyapunov_direct(A, C):
     Solves the continuous-time Lyapunov equation AX + XA^T = -C for X using 
     the direct Kronecker product method.
 
-    Parameters:
+    Args:
         A (torch.Tensor): A batch of square matrices of shape (batch_size, m, m).
                           Represents the coefficient matrix in the Lyapunov equation.
         C (torch.Tensor): A batch of square matrices of shape (batch_size, m, m).
@@ -52,10 +52,6 @@ def lyapunov_direct(A, C):
                       AX + XA^T = -C for each batch.
 
     Notes:
-        - This implementation uses the Kronecker product to construct the system of 
-          equations and solves it using `torch.linalg.solve`.
-        - Ensure that the input matrices A and C are compatible in terms of batch size 
-          and dimensions.
         - The function assumes that the input tensors are on the same device and have 
           the same data type.
     """
