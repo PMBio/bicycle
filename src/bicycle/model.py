@@ -40,7 +40,6 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from bicycle.utils.training import EarlyStopperTorch, lyapunov_direct
 
-# not implemented
 def init_weights(m):
     """
     Initializes the weights of a given neural network layer using Xavier normal initialization
@@ -50,14 +49,6 @@ def init_weights(m):
         m (torch.nn.Module): The neural network layer to initialize. This function specifically
                          targets layers of type nn.Conv2d, nn.Linear, and nn.ConvTranspose2d.
 
-    Behavior:
-    - For the weights of the specified layer types, Xavier normal initialization is applied
-      with a gain of 0.1.
-    - If the layer has a bias term, it is initialized to zero.
-
-    Note:
-    - Xavier initialization is designed to keep the scale of gradients roughly the same
-      in all layers, which can help with training stability.
     """
     if isinstance(m, (nn.Conv2d, nn.Linear, nn.ConvTranspose2d)):
         torch.nn.init.xavier_normal_(m.weight, gain=0.1)
@@ -93,12 +84,6 @@ class Encoder(nn.Module):
             Processes the input tensor `x` and returns the mean (`mu`) and
             variance (`variance`) of the latent distribution.
 
-    Example:
-        >>> encoder = Encoder(x_dim=100, z_dim=10, n_cond=5)
-        >>> x = torch.randn(32, 105)  # Batch of 32 samples with 100 features + 5 conditions
-        >>> mu, variance = encoder(x)
-        >>> print(mu.shape, variance.shape)
-        torch.Size([32, 10]) torch.Size([32, 10])
     """
     def __init__(self,
                  x_dim: int,
@@ -121,7 +106,6 @@ class Encoder(nn.Module):
         self.net.apply(init_weights)
 
     def forward(self, x):
-        """Overrides pyTorchs nn.Module.forward function."""
         x = self.net(x)
         mu = x[:, : self.z_dim]
         variance = torch.nn.Softplus()(x[:, self.z_dim :]) + 1e-6
@@ -130,7 +114,7 @@ class Encoder(nn.Module):
 
 class OmegaIterative(pl.LightningModule):
     """
-    This class optimizes omega to fit the latent normal distribution of z.
+    This class gives a parametrization for omega and computes B.
     It utilizes continuous lyapunov equation and assumes steady state.
     The class subsets pyTorch_lightnings LightningModule class.
 
@@ -221,7 +205,7 @@ class BICYCLE(pl.LightningModule):
     def __init__(
         self,
         lr,
-        gt_interv,  #ground truth of interventions?
+        gt_interv,
         n_genes,
         n_samples,
         lyapunov_penalty=True,
@@ -248,7 +232,7 @@ class BICYCLE(pl.LightningModule):
         test_gene_ko: list = None,
         use_latents: bool = True,
         covariates: Tensor = None,
-        n_factors: int = 0,                 #determines factorization?
+        n_factors: int = 0,
         intervention_type: str = "dCas9",
         sigma_min: float = 1e-3,
         T: float = 1.0,
@@ -349,7 +333,7 @@ class BICYCLE(pl.LightningModule):
         self.mask = mask
         self.use_encoder = use_encoder
         self.use_latents = use_latents
-        self.n_factors = n_factors      # ==0
+        self.n_factors = n_factors
         self.intervention_type = intervention_type
         self.sigma_min = sigma_min
         self.train_only_likelihood = train_only_likelihood
@@ -562,15 +546,6 @@ class BICYCLE(pl.LightningModule):
         """
         Configures and returns the optimizer and learning rate scheduler for the model.
 
-        This method selects the optimizer based on the `self.optimizer` attribute and
-        applies the specified learning rate (`self.lr`) and additional optimizer-specific
-        keyword arguments (`self.optimizer_kwargs`). It supports the following optimizers:
-        
-        - "adam": Uses `torch.optim.Adam`.
-        - "rmsprop": Uses `torch.optim.RMSprop`.
-        - "adamlrs": Uses `torch.optim.Adam` with a learning rate scheduler
-          (`torch.optim.lr_scheduler.ReduceLROnPlateau`).
-
         Returns:
             - If `self.optimizer` is "adam" or "rmsprop", returns an instance of the
               corresponding optimizer.
@@ -583,10 +558,6 @@ class BICYCLE(pl.LightningModule):
             - The "adamlrs" option includes a learning rate scheduler that reduces the
               learning rate when the monitored metric stops improving. The monitored
               metric is currently set to "train_loss".
-            - Ensure that `self.optimizer_kwargs` contains valid arguments for the
-              selected optimizer.
-            - The `FIXME` comment indicates that the monitored metric ("train_loss")
-              should be verified for correctness.
         """
         print("Using optimizer_kwargs:", self.optimizer_kwargs)
         if self.optimizer == "adam":
@@ -634,9 +605,6 @@ class BICYCLE(pl.LightningModule):
               interventions.
             - Diagonal elements of beta matrices are set to zero to inhibit
               self-regulation.
-            - The function uses PyTorch operations for tensor manipulation,
-              including `torch.einsum` for efficient computation of matrix
-              products.
         """
 
         # Resets beta to masked beta_val if masked not None
@@ -655,7 +623,7 @@ class BICYCLE(pl.LightningModule):
         # initializes betas as merge of
         # beta and beta_p with gt_interv as mask
         if self.n_factors == 0:
-            # in case of interference
+            # in case of CRISPR-interference
             if self.intervention_type == "dCas9":
                 betas = iv_a[:, None, :] * self.beta.to(self.device) + (1 - iv_a)[
                     :, None, :
@@ -741,16 +709,7 @@ class BICYCLE(pl.LightningModule):
         return alphas, betas, B, sigmas
 
     def lyapunov_lhs(self, B):
-        """
-        Computes the left-hand side of the time continuous lyapunov equation.
-
-        Args:
-            B: matrix with dimensions (batch, genes, genes).
-            Equates to $$I_G - \beta^T$$.
-
-        Notes:
-            - omega factorized with sigma_min to avoid vanishing gradient.
-        """
+        """Computes the left-hand side of the time continuous lyapunov equation."""
         mat = B @ (
             torch.diag_embed(self.pos(self.w_cov_diag) + self.sigma_min)
             + self.w_cov_factor @ self.w_cov_factor.transpose(1, 2)
@@ -758,16 +717,7 @@ class BICYCLE(pl.LightningModule):
         return mat + mat.transpose(1, 2)
 
     def lyapunov_rhs(self, sigmas):
-        """
-        Computes right-hand side of the time continuous lyapunov equation.
-
-        Args:
-            sigmas: Matrix with dimensions (batch, genes). Sigma represents the effect of
-                the Wiener Process on the transcription of each gene. 
-
-        Returns:
-            sigmas @ sigmas^T
-        """
+        """Computes right-hand side of the time continuous lyapunov equation."""
         return torch.bmm(sigmas, sigmas.transpose(1, 2))
 
     # def compute_normalisations(self, log_likelihood, z_kl, l1_loss, spectral_loss, loss_lyapunov):
@@ -792,27 +742,7 @@ class BICYCLE(pl.LightningModule):
     #     self._normalisation_computed = True
 
     def scale_losses(self, z_kl, l1_loss, loss_spectral=None, loss_lyapunov=None):
-        """
-        Function to scale the loss outputs. 
-
-        Args:
-            z_kl
-            l1_loss
-            loss_spectral (default None)
-            loss_lyapunov (default None)
-
-        Returns:
-            tuple:(
-                scaled kl_loss,
-                scaled l1_loss,
-                scaled spectral loss,
-                scaled lyapunov loss
-                )
-
-        Notes:
-            - Returns None for scaled spectral and/or
-            lyapunov loss if the respective input was None.
-        """
+        """Function to scale the loss outputs in training_step."""
         l1_loss = self.scale_l1 * l1_loss
         z_kl = self.scale_kl * z_kl
 
@@ -824,26 +754,7 @@ class BICYCLE(pl.LightningModule):
         return z_kl, l1_loss, loss_spectral, loss_lyapunov
 
     def split_samples(self, samples, sim_regime, sample_idx, data_category):
-        """
-        Splits samples, sim_regime and sample_idx into training, 
-        validation and testing set according to data_category.
-        
-        Args:
-            samples
-            sim_regime: simulation regime
-            sample_idx
-            data_category: subscriptable filled with 1, 2 and 3 (1:train, 2: validate, 3: test)
-            
-
-        Returns: 
-            tuple: (
-            sample_train, sim_regime_train, sample_idx_train,
-            sample_validate, sim_regime_validate, sample_idx_validate,
-            sample_test, sim_regime_test, sample_idx_test
-            )
-        Notes:
-            - All arguments must have the same length and must be subscriptable.
-        """
+        """Function to split samples according to data_category."""
         # Split all rows according to is_valid_data
         samples_train = samples[data_category == 0]
         sim_regime_train = sim_regime[data_category == 0]
@@ -894,7 +805,7 @@ class BICYCLE(pl.LightningModule):
     def get_mvn_normal(self, B, alphas, sim_regime, sigmas):
         """
         Compute the latent multivariate normal distribution of gene expression.
-        E.g. solution of lyapunov equation.
+        E.g. equilibrium distribution of z according to the lyapunov equation.
 
         Args:
             B: equates to I - beta^T
@@ -961,9 +872,8 @@ class BICYCLE(pl.LightningModule):
             torch.distributions.MultivariateNormal
 
         Notes:
-            - Uses the self.use_encoder attribute to determine the method.
-                - If self.use_encoder: Uses a neural network to infer mean and variance of the distribution.
-                - Else: Uses the self.z_loc and self.z_scale + self.sigma_min attributes as mean and variance.
+            - If self.use_encoder: Uses a neural network to infer mean and variance of the distribution.
+            - Else: Uses the self.z_loc and self.z_scale + self.sigma_min attributes as mean and variance.
         """
         if self.use_encoder:
             gt_nonzeros = self.gt_nonzeros.to(self.device)
@@ -1045,17 +955,6 @@ class BICYCLE(pl.LightningModule):
         return spectral_loss
 
     def training_step(self, batch, batch_idx):
-        """
-        Overrides the pyTorch Lightning LightningModule.training_step function.
-
-        Args:
-            batch: Output of the DataLoader. Should contain:
-                samples, sim_regime, sample_idx, data_category
-        
-        Returns:
-            loss: loss for training Bicycle
-        
-        """
         kwargs = {"on_step": False, "on_epoch": True}
         prefix = "train" if self.training else "valid"
 
@@ -1304,7 +1203,7 @@ class BICYCLE(pl.LightningModule):
 
     def predict_percentages(self, batch):
         """
-        Predicts percentage probabilities for a given batch of data.
+        Calculates posterior distribution and returns means, normalized to 1.
 
         Args:
             batch (tuple): A tuple containing the following elements:
@@ -1314,8 +1213,8 @@ class BICYCLE(pl.LightningModule):
             - data_category (Any): The category or type of data being processed.
 
         Returns:
-            Tensor: A tensor containing the predicted percentage probabilities 
-            for each class, computed using the softmax function.
+            Tensor: A tensor containing the percentage gene expression
+            for each gene, computed using the softmax function.
         """
 
         samples, sim_regime, sample_idx, data_category = batch
@@ -1371,9 +1270,7 @@ class BICYCLE(pl.LightningModule):
         return loss
 
     def predict_means(self, regimes=[]):
-        """
-        Method to predict the mean latent expression of genes.
-        """
+        """Method to predict the mean latent expression of genes."""
 
         if len(regimes) < 1 or np.asarray(regimes).max() >= self.n_contexts:
             print("List of regimes to predict not valid... skipping. List:", regimes)
