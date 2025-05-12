@@ -825,7 +825,7 @@ class BICYCLE(pl.LightningModule):
 
     def split_samples(self, samples, sim_regime, sample_idx, data_category):
         """
-        Splits a samples, sim_regime and sample_idx into training, 
+        Splits samples, sim_regime and sample_idx into training, 
         validation and testing set according to data_category.
         
         Args:
