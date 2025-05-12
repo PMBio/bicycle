@@ -71,7 +71,7 @@ class GenerateCallback(pl.Callback):
 
     Notes:
     - Calls the plot_training_results function from bicycle.utils.plotting
-        after each epoch thats a multiple of self.plot_epoch_callback. 
+        after each epoch that's a multiple of `plot_epoch_callback`. 
     """
     def __init__(self, file_name_plot, plot_epoch_callback=10, true_beta=None, labels=None):
         """
