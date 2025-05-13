@@ -15,16 +15,11 @@ Classes:
 
 Features:
     - Supports multiple loss functions, including KL divergence, negative log-likelihood (NLL),
-      Lyapunov loss, and sparsity loss.
+      Lyapunov loss, sparsity loss, and spectral loss.
     - Handles various intervention types, including CRISPR-based perturbations (e.g., Cas9, dCas9).
     - Provides options for latent variable modeling using an encoder or direct parameterization.
-    - Implements spectral loss to ensure stability in gene-gene interaction matrices.
     - Supports early stopping during training for efficient convergence.
 
-Dependencies:
-    - PyTorch
-    - PyTorch Lightning
-    - NumPy
 """
 
 import math
@@ -506,7 +501,7 @@ class BICYCLE(pl.LightningModule):
         else:
             self.T = torch.tensor(T)  # torch.nn.Parameter(torch.tensor(1.0))
 
-        # For benchmarking
+        # The following assignments are only relevant for model evaluation
         if gt_beta is not None:
             self.gt_beta = gt_beta
         if train_gene_ko is not None:
@@ -792,7 +787,6 @@ class BICYCLE(pl.LightningModule):
         alphas_broadcasted = alphas[sim_regime]
 
         if B.shape[0] == 1:
-            # remove all dimensions==1
             B_broadcasted = B_broadcasted.squeeze()
             alphas_broadcasted = alphas_broadcasted.squeeze()
 
