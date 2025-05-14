@@ -569,23 +569,24 @@ def get_diagonal_mask(n_genes, device):
 
 def compute_inits(init_data, rank_w_cov_factor, n_contexts, normalized=False):
     """
-    Function to compute initial tensors for the bicycle model.
+    Computes initial tensors for the bicycle model.
 
     Args:
-        init_data: iterable, that contains samples, sim_regime, sample_idx, data_category.
-            Corresponds to pytorchs DataLoader.dataset .
-        rank_w_cov_factor: int that is the minimum of [number of TFs, n_genes-1]
-        n_contexts: int (number of contexts)
-        normalized: bool to specify if init_data is normalized. 
-            If False the function normalizes to counts per gene.
+        init_data (Iterable): Contains samples, sim_regime, sample_idx, data_category.
+            Corresponds to pytorch's `DataLoader.dataset`.
+        rank_w_cov_factor (int): Minimum of [number of TFs, n_genes-1].
+        n_contexts (int): Number of contexts
+        normalized (bool): Whether `init_data` is normalized. 
+            If False, the function normalizes to counts per gene.
 
     Returns:
-        Dict("alpha": alpha,
-            "w_cov_factor": w_cov_factor,
-            "w_cov_diag": w_cov_diag,)
+        dict: Dictionary with the following keys:
+            - "alpha": Alpha tensor.
+            - "w_cov_factor": Covariance factor tensor.
+            - "w_cov_diag": Covariance diagonal tensor.
 
     Notes:
-        - Computes only alpha and omega. For use as init_tensors in BICYCLE, 
+        Computes only alpha and omega. For use as `init_tensors` in BICYCLE, 
         adding a "beta" key is possible.
     
     """
