@@ -20,6 +20,18 @@ Features:
     - Provides options for latent variable modeling using an encoder or direct parameterization.
     - Supports early stopping during training for efficient convergence.
 
+Notes:
+    - The model is assuming a steady state as described by the lyapunov stability principles:
+        A system f(x) is stable if there exists a function V: R^n->R, that satisfies:
+        1. V(x)=0 if x=0
+        2. V(x)>0 if x!=0
+        3. V°(x) = dV(t)/dt = sum(dV/dx_i * f_i(x)) = nabla V *f(x) =< 0 for all x!=0
+        The model assumes V(x) as a time-continuous Lyapunov equation:
+        $$B@\omega+\omega@B.T=\sigma@\sigma.T$$.
+
+    LYAPUNOV, A. M. (1992). The general problem of the stability of motion.
+    International Journal of Control, 55(3), 531–534. https://doi.org/10.1080/00207179208934253
+
 """
 
 import math
@@ -109,8 +121,9 @@ class Encoder(nn.Module):
 
 class OmegaIterative(pl.LightningModule):
     """
-    This class gives a parametrization for omega and computes B.
-    It utilizes continuous lyapunov equation and assumes steady state.
+    This class optimizes omega by minimizing the difference
+    between the Lyapunov equations RHS and LHS. Thereby we can learn
+    to approximate the solution to the Lyapunov equation
     The class subsets pyTorch_lightnings LightningModule class.
 
     Attributes:
@@ -130,22 +143,14 @@ class OmegaIterative(pl.LightningModule):
 
     Methods:
         configure_optimizers():
-            Configures the optimizer for training. 
-            Uses Adam optimizer with the specified learning rate.
 
         training_step(batch):
-            Computes the Lyapunov loss for a given training batch.
-            The loss is the squared difference between the left-hand side
-            and right-hand side of the Lyapunov equation, normalized by the
-            square of the number of genes.
 
         lyapunov_lhs():
             Computes the left-hand side of the Lyapunov equation
             as `B @ omega + (B @ omega).T`.
 
         lyapunov_rhs():
-            Computes the right-hand side of the Lyapunov equation
-            as `sigma @ sigma.T`.
     """
     def __init__(self,
                  alpha,
@@ -179,7 +184,12 @@ class OmegaIterative(pl.LightningModule):
         return optim.Adam(self.parameters(), lr=self.lr)
 
     def training_step(self, batch, **kwargs):
-
+        """
+        Computes the Lyapunov loss for a given training batch.
+        The loss is the squared difference between the left-hand side
+        and right-hand side of the Lyapunov equation, normalized by the
+        square of the number of genes.
+        """
         loss_lyapunov = torch.sum(
             torch.square(
             self.lyapunov_lhs() - self.lyapunov_rhs()
@@ -189,10 +199,14 @@ class OmegaIterative(pl.LightningModule):
         return loss_lyapunov
 
     def lyapunov_lhs(self):
+        """Computes the left-hand side of the Lyapunov equation as
+        $$B @ \omega + (B @ \omega).T$$."""
         mat = self.B.detach() @ self.omega
         return mat + mat.transpose(0, 1)
 
     def lyapunov_rhs(self):
+        """Computes the right-hand side of the Lyapunov equation as
+        $$\sigma @ \sigma.T$$."""
         return self.sigma.detach() @ self.sigma.detach().transpose(0, 1)
 
 
