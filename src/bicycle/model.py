@@ -8,13 +8,12 @@ designed to infer causal relationships in GRNs using perturbation-based data.
 Classes:
     - Encoder: Encodes input data into a latent space representation for use in a
       Variational Autoencoder (VAE) or similar architecture.
-    - Omega_Iterative: Optimizes a matrix `omega` using Lyapunov stability principles
-      for steady-state assumptions in GRNs.
+    - Omega_Iterative: Optimizes a matrix `omega` to satisfy the Lyapunov equation.
     - BICYCLE: The main model class that integrates various components for GRN inference,
       including latent variable modeling, intervention handling, and loss computation.
 
 Features:
-    - Supports multiple loss functions, including KL divergence, negative log-likelihood (NLL),
+    - Evaluates multiple loss functions, including KL divergence, negative log-likelihood (NLL),
       Lyapunov loss, sparsity loss, and spectral loss.
     - Handles various intervention types, including CRISPR-based perturbations (e.g., Cas9, dCas9).
     - Provides options for latent variable modeling using an encoder or direct parameterization.
@@ -54,13 +53,12 @@ def init_weights(m):
 
     Args:
         m (torch.nn.Module): The neural network layer to initialize. This function specifically
-                         targets layers of type nn.Conv2d, nn.Linear, and nn.ConvTranspose2d.
+            targets layers of type nn.Conv2d, nn.Linear, and nn.ConvTranspose2d.
 
     """
     if isinstance(m, (nn.Conv2d, nn.Linear, nn.ConvTranspose2d)):
         torch.nn.init.xavier_normal_(m.weight, gain=0.1)
         if m.bias is not None:
-            # m.bias.data.fill_(0.01)
             m.bias.data.zero_()
 
 
@@ -70,7 +68,6 @@ class Encoder(nn.Module):
 
     This class encodes input data into a latent space representation, producing
     both the mean (`mu`) and variance (`variance`) of the latent distribution.
-    Used to sample z later, using the reparameterization trick.
 
     Attributes:
         z_dim (int): Dimensionality of the latent space.
@@ -85,11 +82,6 @@ class Encoder(nn.Module):
             Defaults to `nn.GELU`.
         hid_dim (int, optional): Dimensionality of the hidden layers in the network.
             Defaults to 500.
-
-    Methods:
-        forward(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-            Processes the input tensor `x` and returns the mean (`mu`) and
-            variance (`variance`) of the latent distribution.
 
     """
     def __init__(self,
@@ -122,8 +114,8 @@ class Encoder(nn.Module):
 class OmegaIterative(pl.LightningModule):
     """
     This class optimizes omega by minimizing the difference
-    between the Lyapunov equations RHS and LHS. Thereby we can learn
-    to approximate the solution to the Lyapunov equation
+    between the Lyapunov equation's RHS and LHS. Thereby we can
+    approximate a solution to the Lyapunov equation (LE).
     The class subsets pyTorch_lightnings LightningModule class.
 
     Attributes:
@@ -141,16 +133,6 @@ class OmegaIterative(pl.LightningModule):
         B (torch.Tensor): A matrix derived from the beta matrix,
             used in Lyapunov computations.
 
-    Methods:
-        configure_optimizers():
-
-        training_step(batch):
-
-        lyapunov_lhs():
-            Computes the left-hand side of the Lyapunov equation
-            as `B @ omega + (B @ omega).T`.
-
-        lyapunov_rhs():
     """
     def __init__(self,
                  alpha,
@@ -199,14 +181,12 @@ class OmegaIterative(pl.LightningModule):
         return loss_lyapunov
 
     def lyapunov_lhs(self):
-        """Computes the left-hand side of the Lyapunov equation as
-        $$B @ \omega + (B @ \omega).T$$."""
+        """Computes the left-hand side of the LE: $$B @ \omega + (B @ \omega).T$$."""
         mat = self.B.detach() @ self.omega
         return mat + mat.transpose(0, 1)
 
     def lyapunov_rhs(self):
-        """Computes the right-hand side of the Lyapunov equation as
-        $$\sigma @ \sigma.T$$."""
+        """Computes the right-hand side of the LE: $$\sigma @ \sigma.T$$."""
         return self.sigma.detach() @ self.sigma.detach().transpose(0, 1)
 
 
@@ -252,70 +232,39 @@ class BICYCLE(pl.LightningModule):
     ):
         """
         Initializes the Bicycle model as a subclass of pl.LightningModule.
-        Please cite: Rohbeck et al., "Bicycle: Intervention-Based Causal Discovery with Cycles”
 
         Args:
-            lr: Float that specifies learning rate
-            gt_interv: torch.Tensor object, representing the ground truth of the intervention.
-            n_genes: int for the number of genes
-            n_samples: int for the number of cells/samples
-            lyapunov penalty:
-                bool that specifies if the lyapunov function should be used to determine the loss.
-            perfect_interventions:
-                bool to determine if interventions/perturbations should be treated as 100% knockout.
-            rank_omega_cov_factor:
-                int that determines the third dimension of the covariance matrix omega.
-                Dimentions of omega are(batch, n_genes, rank_omega_cov_factor)
-            optimizer: Determines the optimizer to be used. Options available:
-                - "adam": Uses `torch.optim.Adam`.
-                - "rmsprop": Uses `torch.optim.RMSprop`.
-                - "adamlrs": Uses `torch.optim.Adam` with a learning rate scheduler
-                  (`torch.optim.lr_scheduler.ReduceLROnPlateau`).
-            optimizer_kwargs: **kwargs to use for the selected optimizer function.
-            scale_l1: float to scale the loss.
-            scale_spectral: float to scale the loss.
-            scale_lyapunov: float to scale the loss.
-            x_distribution: Distribution to compute the NLL loss by.
-                Currently supported are: "Poisson", "Normal", "NormalNormal", "Multinomial".
-            init_tensors: Dict containing initial values for the model parameters.
-                Supported keys: "alpha": torch.Tensor, "beta": torch.Tensor,
-                "w_cov_factor": torch.Tensor, "w_cov_diag": torch.Tensor.
-                Only beta will be initialized as learning parameter.
-            mask: torch.Tensor
-                Matrix to mask gene interactions. Must be of shape (n_genes, n_genes).
-            mask_genes: list
-                Gene indexes to not be used in calculating the NLL loss.
-            use_encoder: bool
-                Determines if the Encoder() module should be used to estimate the mean and
-                variance of the posterior latent distribution q(z|x).
-            gt_beta: torch.Tensor
-                Ground truth gene gene interaction matrix, to be used in benchmarking the model.
-            train_gene_ko: list
-                List of knocked-out genes, to be used in benchmarking.
-            test_gene_ko: list
-                List of knocked-out genes, to be used in benchmarking.
-            use_latents: bool
-                Determines if latent representations of the sample data x into latent data z
-                should be used.
-            covariates: torch.Tensor
-                Covariates to be used in the model. If None, no covariates are used.
-                Must be of shape (cells, n_covariates).
-            n_factors: int
-                Number of factors to be used in factorization of beta. If n_factors = 0 no
-                factorization is used.
-            intervention_type: str
-                Type of intervention, that was used for perturbation. Currently implemented:
-                "Cas9", "dCas9".
-            sigma_min: float
-                Minimum value of sigma in the Ornstein-Uhlenbeck process, that is used to model
-                gene expression.
-            train_only_likelihood: bool
-                If True, only NLL loss is used to train the model.
-            train_only_latents: bool
-                If True all data is treated as training data and only latent scale and location
-                are optimized.
+            lr (float): Learning rate.
+            gt_interv (torch.Tensor): Ground truth intervention matrix.
+            n_genes (int): Number of genes.
+            n_samples (int): Number of cells/samples.
+            lyapunov_penalty (bool): Whether to use the Lyapunov function in the loss calculation.
+            perfect_interventions (bool): Treat perturbations as 100% knockouts if True.
+            rank_omega_cov_factor (int): Third dimension of the covariance matrix omega. 
+                Dimensions: (batch, n_genes, rank_omega_cov_factor).
+            optimizer (str): Optimizer to use. Options: "adam", "rmsprop", "adamlrs".
+            optimizer_kwargs (dict): Keyword arguments for the selected optimizer.
+            scale_l1 (float): Scaling factor for L1 loss component.
+            scale_spectral (float): Scaling factor for spectral loss component.
+            scale_lyapunov (float): Scaling factor for Lyapunov loss component.
+            x_distribution (str): Distribution for NLL loss. Supported options: 
+                "Poisson", "Normal", "NormalNormal", "Multinomial".
+            init_tensors (dict): Initial values for model parameters. Valid keys: 
+                "alpha", "beta", "w_cov_factor", "w_cov_diag". Only beta is learnable.
+            mask (torch.Tensor): Gene interaction mask matrix of shape (n_genes, n_genes).
+            mask_genes (list): Gene indices excluded from NLL loss calculation.
+            use_encoder (bool): Use Encoder() to estimate posterior latent distribution q(z|x).
+            gt_beta (torch.Tensor): Ground truth gene interaction matrix for benchmarking.
+            train_gene_ko (list): Training-phase knocked-out genes for benchmarking.
+            test_gene_ko (list): Test-phase knocked-out genes for benchmarking.
+            use_latents (bool): Use latent representations of sample data x.
+            covariates (torch.Tensor): Covariates for the model. Shape: (cells, n_covariates).
+            n_factors (int): Number of factors for beta factorization. 0 = no factorization.
+            intervention_type (str): Intervention type. Options: "Cas9", "dCas9".
+            sigma_min (float): Minimum sigma in Ornstein-Uhlenbeck process.
+            train_only_likelihood (bool): Train exclusively with NLL loss if True.
+            train_only_latents (bool): Optimize only latent scale/location parameters if True.
 
-            
         """
         super().__init__()
 
@@ -751,7 +700,7 @@ class BICYCLE(pl.LightningModule):
     #     self._normalisation_computed = True
 
     def scale_losses(self, z_kl, l1_loss, loss_spectral=None, loss_lyapunov=None):
-        """Function to scale the loss outputs in training_step."""
+        """Scales the loss outputs in the training_step."""
         l1_loss = self.scale_l1 * l1_loss
         z_kl = self.scale_kl * z_kl
 
@@ -763,7 +712,7 @@ class BICYCLE(pl.LightningModule):
         return z_kl, l1_loss, loss_spectral, loss_lyapunov
 
     def split_samples(self, samples, sim_regime, sample_idx, data_category):
-        """Function to split samples according to data_category."""
+        """Splits samples according to data_category."""
         # Split all rows according to is_valid_data
         samples_train = samples[data_category == 0]
         sim_regime_train = sim_regime[data_category == 0]
@@ -804,7 +753,7 @@ class BICYCLE(pl.LightningModule):
             B_broadcasted = B_broadcasted.squeeze()
             alphas_broadcasted = alphas_broadcasted.squeeze()
 
-        # is x_bar equivalent to z_bar in the paper?
+        # Note that x_bar is equivalent to z_bar if no likelihood model is used
         x_bar = torch.linalg.solve(B_broadcasted, alphas_broadcasted[:, :, None]).squeeze()
         # TODO: Use torch.linalg.solve_ex() once it is no longer experimental in pytorch:
         # x_bar = torch.linalg.solve_ex(B_broadcasted, alphas_broadcasted[:, :, None])[0].squeeze()
@@ -812,8 +761,8 @@ class BICYCLE(pl.LightningModule):
 
     def get_mvn_normal(self, B, alphas, sim_regime, sigmas):
         """
-        Compute the latent multivariate normal distribution of gene expression.
-        E.g. equilibrium distribution of z according to the lyapunov equation.
+        Computes the latent multivariate normal distribution of gene expression.
+        E.g. the distribution of z according to the lyapunov equation.
 
         Args:
             B: equates to I - beta^T
@@ -868,13 +817,11 @@ class BICYCLE(pl.LightningModule):
 
     def _get_posterior_dist(self, sample_idx, samples, sim_regime):
         """
-        Function to approximate the latent posterior distribution of x: q(z|x).
+        Approximates the latent posterior distribution of x: q(z|x).
 
         Args:
-            sample_idx
             samples: Data tensor with dimensions (batches, genes, cells).
                 Equivalent to x in the paper.
-            sim_regime
 
         Returns:
             torch.distributions.MultivariateNormal
@@ -1240,9 +1187,9 @@ class BICYCLE(pl.LightningModule):
         Super function returns a prediction. This version returns the loss.
 
         Args:
-            batch: Current batch.
-            batch_idx: Index of current batch.
-            dataloader_idx: Index of the current dataloader.
+            batch (torch.Tensor): Current batch.
+            batch_idx (int): Index of current batch.
+            dataloader_idx (int): Index of the current dataloader.
 
         Returns:
             Linear sum of KL-loss and NLL-loss.
