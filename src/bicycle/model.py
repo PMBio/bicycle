@@ -21,11 +21,11 @@ Features:
 
 Notes:
     - The model is assuming a steady state as described by the lyapunov stability principles:
-        A system f(x) is stable if there exists a function V: R^n->R, that satisfies:
-        1. V(x)=0 if x=0
-        2. V(x)>0 if x!=0
-        3. V°(x) = dV(t)/dt = sum(dV/dx_i * f_i(x)) = nabla V *f(x) =< 0 for all x!=0
-        The model assumes V(x) as a time-continuous Lyapunov equation:
+        A system f(z) is stable if there exists a function V: R^n->R, that satisfies:
+        1. V(z)=0 if z=0
+        2. V(z)>0 if z!=0
+        3. V°(z) = dV(t)/dt = sum(dV/dx_i * f_i(z)) = nabla V *f(z) =< 0 for all z!=0
+        The model assumes V(z) as a time-continuous Lyapunov equation:
         $$B@\omega+\omega@B.T=\sigma@\sigma.T$$.
 
     LYAPUNOV, A. M. (1992). The general problem of the stability of motion.
