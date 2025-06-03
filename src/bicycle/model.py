@@ -19,15 +19,6 @@ Features:
     - Provides options for latent variable modeling using an encoder or direct parameterization.
     - Supports early stopping during training for efficient convergence.
 
-Notes:
-    - The model is assuming a steady state as described by the lyapunov stability principles:
-        A system f(z) is stable if there exists a function V: R^n->R, that satisfies:
-        1. V(z)=0 if z=0
-        2. V(z)>0 if z!=0
-        3. V°(z) = dV(t)/dt = sum(dV/dx_i * f_i(z)) = nabla V *f(z) =< 0 for all z!=0
-        The model assumes V(z) as a time-continuous Lyapunov equation:
-        $$B@\omega+\omega@B.T=\sigma@\sigma.T$$.
-
     LYAPUNOV, A. M. (1992). The general problem of the stability of motion.
     International Journal of Control, 55(3), 531–534. https://doi.org/10.1080/00207179208934253
 
