@@ -19,6 +19,7 @@ def plot_training_results(
     callback=True,
     labels=None,
 ):
+    """Generates plots of training results for the bicycle model."""
     fig, ax = plt.subplots(3, 2, figsize=(14, 16))
     df_plot = pd.DataFrame(trainer.logger.history).reset_index(drop=True)
     df_plot["epoch"] = df_plot.index

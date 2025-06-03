@@ -37,6 +37,24 @@ def sylvester_direct(A, B, C):
 
 
 def lyapunov_direct(A, C):
+    """
+    Solves the continuous-time Lyapunov equation ``AX + XA^T = -C`` for X using 
+    the direct Kronecker product method.
+
+    Args:
+        A (torch.Tensor): A batch of square matrices of shape (batch_size, m, m).
+            Represents the coefficient matrix in the Lyapunov equation.
+        C (torch.Tensor): A batch of square matrices of shape (batch_size, m, m).
+            Represents the right-hand side matrix in the Lyapunov equation.
+
+    Returns:
+        torch.Tensor: A batch of solutions X of shape (batch_size, m, m) such that 
+            ``AX + XA^T = -C`` for each batch.
+
+    Notes:
+        The function assumes that the input tensors are on the same device and have 
+        the same data type.
+    """
     B = A.transpose(1, 2).double()
     batch_size = A.shape[0]
     m = A.shape[-1]

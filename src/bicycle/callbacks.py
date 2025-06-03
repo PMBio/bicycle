@@ -65,7 +65,25 @@ class CustomModelCheckpoint(ModelCheckpoint):
 
 
 class GenerateCallback(pl.Callback):
+    """
+    Class for generating a callback at the end of each training epoch of the bicycle model.
+    Subclasses pytorch_lightnings Callback function.
+
+    Notes:
+    - Calls the plot_training_results function from bicycle.utils.plotting
+        after each epoch that's a multiple of `plot_epoch_callback`. 
+    """
     def __init__(self, file_name_plot, plot_epoch_callback=10, true_beta=None, labels=None):
+        """
+        Initializes the GenerateCallback function for plotting training results during training.
+
+        Args:
+            file_name_plot (str): containing the file_name for the saved plots.
+                Can be given with or without the suffix.
+            plot_epoch_callback (int): specifying the callback interval.
+            true_beta (Optional|torch.Tensor): containing the ground truth gene adjacency matrix.
+            labels (Iterable): contains the gene labels.
+        """
         super().__init__()
         self.plot_epoch_callback = plot_epoch_callback
         self.true_beta = true_beta

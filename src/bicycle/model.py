@@ -1,27 +1,86 @@
+"""
+This module implements the Bicycle model for gene regulatory network (GRN) inference.
+
+The algorithm is based on the paper "Bicycle: Intervention-Based Causal Discovery with Cycles"
+by Rohbeck et al. It provides a PyTorch Lightning implementation of the Bicycle model, which is
+designed to infer causal relationships in GRNs using perturbation-based data.
+
+Classes:
+    - Encoder: Encodes input data into a latent space representation for use in a
+      Variational Autoencoder (VAE) or similar architecture.
+    - Omega_Iterative: Optimizes a matrix `omega` to satisfy the Lyapunov equation.
+    - BICYCLE: The main model class that integrates various components for GRN inference,
+      including latent variable modeling, intervention handling, and loss computation.
+
+Features:
+    - Evaluates multiple loss functions, including KL divergence, negative log-likelihood (NLL),
+      Lyapunov loss, sparsity loss, and spectral loss.
+    - Handles various intervention types, including CRISPR-based perturbations (e.g., Cas9, dCas9).
+    - Provides options for latent variable modeling using an encoder or direct parameterization.
+    - Supports early stopping during training for efficient convergence.
+
+    LYAPUNOV, A. M. (1992). The general problem of the stability of motion.
+    International Journal of Control, 55(3), 531–534. https://doi.org/10.1080/00207179208934253
+
+"""
+
 import math
 import time
 
 import numpy as np
 import pytorch_lightning as pl
 import torch
-import torch.optim as optim
+from torch import optim
 from torch import Tensor, nn
 from torch.distributions.kl import kl_divergence
 from torch.utils.data import DataLoader, TensorDataset
 
 from bicycle.utils.training import EarlyStopperTorch, lyapunov_direct
 
-
 def init_weights(m):
+    """
+    Initializes the weights of a given neural network layer using Xavier normal initialization
+    and sets the biases to zero if they exist.
+
+    Args:
+        m (torch.nn.Module): The neural network layer to initialize. This function specifically
+            targets layers of type nn.Conv2d, nn.Linear, and nn.ConvTranspose2d.
+
+    """
     if isinstance(m, (nn.Conv2d, nn.Linear, nn.ConvTranspose2d)):
         torch.nn.init.xavier_normal_(m.weight, gain=0.1)
         if m.bias is not None:
-            # m.bias.data.fill_(0.01)
             m.bias.data.zero_()
 
 
 class Encoder(nn.Module):
-    def __init__(self, x_dim: int, z_dim: int, n_cond: int, act_fn: object = nn.GELU, hid_dim: int = 500):
+    """
+    Encoder module for a Variational Autoencoder (VAE) or similar architecture.
+
+    This class encodes input data into a latent space representation, producing
+    both the mean (`mu`) and variance (`variance`) of the latent distribution.
+
+    Attributes:
+        z_dim (int): Dimensionality of the latent space.
+        net (nn.Sequential): A neural network that processes the input data
+            and outputs the parameters of the latent distribution.
+
+    Args:
+        x_dim (int): Dimensionality of the input data.
+        z_dim (int): Dimensionality of the latent space.
+        n_cond (int): Number of conditional variables to include in the input.
+        act_fn (object, optional): Activation function to use in the network.
+            Defaults to `nn.GELU`.
+        hid_dim (int, optional): Dimensionality of the hidden layers in the network.
+            Defaults to 500.
+
+    """
+    def __init__(self,
+                 x_dim: int,
+                 z_dim: int,
+                 n_cond: int,
+                 act_fn: object = nn.GELU,
+                 hid_dim: int = 500):
         super().__init__()
         self.z_dim = z_dim
         self.net = nn.Sequential(
@@ -43,8 +102,36 @@ class Encoder(nn.Module):
         return mu, variance
 
 
-class Omega_Iterative(pl.LightningModule):
-    def __init__(self, alpha, beta, sigma, lr=1e-2, sigma_min=1e-3, device="cpu"):
+class OmegaIterative(pl.LightningModule):
+    """
+    This class optimizes omega by minimizing the difference
+    between the Lyapunov equation's RHS and LHS. Thereby we can
+    approximate a solution to the Lyapunov equation (LE).
+    The class subsets pyTorch_lightnings LightningModule class.
+
+    Attributes:
+        alpha (torch.Tensor): A tensor representing the alpha parameter,
+            detached and moved to the specified device.
+        beta (torch.Tensor): A tensor representing the beta matrix
+            (gene gene interactions), detached and moved to the specified device.
+        sigma (torch.Tensor): A tensor representing the sigma parameter,
+            detached and moved to the specified device.
+        n_genes (int): The number of genes, derived from the shape of the alpha tensor.
+        lr (float): The learning rate for the optimizer. Default is 1e-2.
+        sigma_min (float): The minimum value for sigma. Default is 1e-3.
+        omega (torch.nn.Parameter): A trainable parameter matrix
+            initialized with random values.
+        B (torch.Tensor): A matrix derived from the beta matrix,
+            used in Lyapunov computations.
+
+    """
+    def __init__(self,
+                 alpha,
+                 beta,
+                 sigma,
+                 lr=1e-2,
+                 sigma_min=1e-3,
+                 device="cpu"):
 
         super().__init__()
         super().to(device)
@@ -58,8 +145,10 @@ class Omega_Iterative(pl.LightningModule):
         self.lr = lr
         self.sigma_min = sigma_min
 
-        self.omega = torch.nn.Parameter(0.1 * torch.randn((self.n_genes, self.n_genes), device=device))
+        self.omega = torch.nn.Parameter(0.1 * torch.randn((self.n_genes, self.n_genes),
+                                                          device=device))
 
+        # calculate B from beta: 1. set \beta diagonal to 0 (no self regulations) 2. B = I - \beta^T
         self.B = torch.eye(self.n_genes, device=self.device) - (
             1.0 - torch.eye(self.n_genes, device=self.device)
         ) * beta.transpose(0, 1)
@@ -67,17 +156,28 @@ class Omega_Iterative(pl.LightningModule):
     def configure_optimizers(self):
         return optim.Adam(self.parameters(), lr=self.lr)
 
-    def training_step(self, batch):
-
-        loss_lyapunov = torch.sum(torch.square(self.lyapunov_lhs() - self.lyapunov_rhs())) / (self.n_genes**2)
+    def training_step(self, batch, **kwargs):
+        """
+        Computes the Lyapunov loss for a given training batch.
+        The loss is the squared difference between the left-hand side
+        and right-hand side of the Lyapunov equation, normalized by the
+        square of the number of genes.
+        """
+        loss_lyapunov = torch.sum(
+            torch.square(
+            self.lyapunov_lhs() - self.lyapunov_rhs()
+            )
+        ) / (self.n_genes**2)
 
         return loss_lyapunov
 
     def lyapunov_lhs(self):
+        """Computes the left-hand side of the LE: $$B @ \omega + (B @ \omega).T$$."""
         mat = self.B.detach() @ self.omega
         return mat + mat.transpose(0, 1)
 
     def lyapunov_rhs(self):
+        """Computes the right-hand side of the LE: $$\sigma @ \sigma.T$$."""
         return self.sigma.detach() @ self.sigma.detach().transpose(0, 1)
 
 
@@ -122,11 +222,40 @@ class BICYCLE(pl.LightningModule):
         mask_genes: list = [],
     ):
         """
-        Parameters
-        ----------
-        covariates: torch.Tensor
-            Covariates to be used in the model. If None, no covariates are used.
-            Must be of shape (cells, n_covariates).
+        Initializes the Bicycle model as a subclass of pl.LightningModule.
+
+        Args:
+            lr (float): Learning rate.
+            gt_interv (torch.Tensor): Ground truth intervention matrix.
+            n_genes (int): Number of genes.
+            n_samples (int): Number of cells/samples.
+            lyapunov_penalty (bool): Whether to use the Lyapunov function in the loss calculation.
+            perfect_interventions (bool): Treat perturbations as 100% knockouts if True.
+            rank_omega_cov_factor (int): Third dimension of the covariance matrix omega. 
+                Dimensions: (batch, n_genes, rank_omega_cov_factor).
+            optimizer (str): Optimizer to use. Options: "adam", "rmsprop", "adamlrs".
+            optimizer_kwargs (dict): Keyword arguments for the selected optimizer.
+            scale_l1 (float): Scaling factor for L1 loss component.
+            scale_spectral (float): Scaling factor for spectral loss component.
+            scale_lyapunov (float): Scaling factor for Lyapunov loss component.
+            x_distribution (str): Distribution for NLL loss. Supported options: 
+                "Poisson", "Normal", "NormalNormal", "Multinomial".
+            init_tensors (dict): Initial values for model parameters. Valid keys: 
+                "alpha", "beta", "w_cov_factor", "w_cov_diag". Only beta is learnable.
+            mask (torch.Tensor): Gene interaction mask matrix of shape (n_genes, n_genes).
+            mask_genes (list): Gene indices excluded from NLL loss calculation.
+            use_encoder (bool): Use Encoder() to estimate posterior latent distribution q(z|x).
+            gt_beta (torch.Tensor): Ground truth gene interaction matrix for benchmarking.
+            train_gene_ko (list): Training-phase knocked-out genes for benchmarking.
+            test_gene_ko (list): Test-phase knocked-out genes for benchmarking.
+            use_latents (bool): Use latent representations of sample data x.
+            covariates (torch.Tensor): Covariates for the model. Shape: (cells, n_covariates).
+            n_factors (int): Number of factors for beta factorization. 0 = no factorization.
+            intervention_type (str): Intervention type. Options: "Cas9", "dCas9".
+            sigma_min (float): Minimum sigma in Ornstein-Uhlenbeck process.
+            train_only_likelihood (bool): Train exclusively with NLL loss if True.
+            train_only_latents (bool): Optimize only latent scale/location parameters if True.
+
         """
         super().__init__()
 
@@ -160,7 +289,9 @@ class BICYCLE(pl.LightningModule):
         self.train_only_latents = train_only_latents
         self.mask_genes = mask_genes
 
-        self.nll_mask = torch.ones(self.n_genes, device=gt_interv.device, dtype=torch.bool)
+        self.nll_mask = torch.ones(self.n_genes,
+                                   device=gt_interv.device,
+                                   dtype=torch.bool)
         if len(self.mask_genes) > 0:
             for g in self.mask_genes:
                 self.nll_mask[g] = False
@@ -168,13 +299,19 @@ class BICYCLE(pl.LightningModule):
         if self.use_latents:
             if self.use_encoder:
                 self.n_conditions = torch.sum(gt_interv.sum(axis=1) > 0).item()
-                self.encoder = Encoder(x_dim=self.n_genes, z_dim=self.n_genes, n_cond=self.n_conditions)
+                self.encoder = Encoder(x_dim=self.n_genes,
+                                       z_dim=self.n_genes,
+                                       n_cond=self.n_conditions)
 
                 self.gt_nonzeros = self.gt_interv[~torch.all(self.gt_interv == 0, axis=1)]
             else:
                 # Cell and gene specific latent expression values
-                self.z_loc = torch.nn.Parameter(torch.zeros((self.n_samples, n_genes)))
-                self.z_scale = torch.nn.Parameter(torch.zeros((self.n_samples, n_genes)))
+                self.z_loc = torch.nn.Parameter(
+                    torch.zeros((self.n_samples, n_genes))
+                )
+                self.z_scale = torch.nn.Parameter(
+                    torch.zeros((self.n_samples, n_genes))
+                )
 
         self.scale_l1 = scale_l1
         self.scale_spectral = scale_spectral
@@ -222,47 +359,62 @@ class BICYCLE(pl.LightningModule):
                     self.beta_idx = torch.where(self.mask > 0.5)
                 self.beta_val = torch.nn.Parameter(0.001 * torch.randn((self.n_entries,)))
             else:
-                raise NotImplementedError("Combination of factorization and masking not implemented yet.")
+                raise NotImplementedError(
+                    "Combination of factorization and masking not implemented yet."
+                )
 
+        # Variables describing *PERTURBED* mechanisms
         if not self.perfect_interventions:
             if self.mask is None:
                 if self.n_factors == 0:
                     self.beta_p = torch.nn.Parameter(0.1 * torch.randn((n_genes, n_genes)))
                 else:
-                    self.gene2factor_p = torch.nn.Parameter(0.00001 * torch.randn((n_genes, n_factors)))
-                    self.factor2gene_p = torch.nn.Parameter(0.00001 * torch.randn((n_factors, n_genes)))
+                    self.gene2factor_p = torch.nn.Parameter(0.00001 *
+                                                            torch.randn((n_genes, n_factors)))
+                    self.factor2gene_p = torch.nn.Parameter(0.00001 *
+                                                            torch.randn((n_factors, n_genes)))
             else:
                 if self.n_factors == 0:
                     self.beta_p_val = torch.nn.Parameter(0.1 * torch.randn((self.n_entries)))
                 else:
-                    raise NotImplementedError("Combination of factorization and masking not implemented yet.")
+                    raise NotImplementedError(
+                        "Combination of factorization and masking not implemented yet."
+                        )
         else:
             if self.mask is None:
                 if self.n_factors == 0:
-                    self.beta_p = torch.nn.Parameter(torch.zeros((n_genes, n_genes)))
+                    self.beta_p = torch.nn.Parameter(torch.zeros((n_genes,
+                                                                  n_genes)))
                     self.beta_p.requires_grad = False
                 else:
-                    self.gene2factor_p = torch.nn.Parameter(torch.zeros((n_genes, n_factors)))
+                    self.gene2factor_p = torch.nn.Parameter(
+                        torch.zeros((n_genes, n_factors))
+                    )
                     self.gene2factor_p.requires_grad = False
-                    self.factor2gene_p = torch.nn.Parameter(torch.zeros((n_factors, n_genes)))
+                    self.factor2gene_p = torch.nn.Parameter(
+                        torch.zeros((n_factors, n_genes))
+                    )
                     self.factor2gene_p.requires_grad = False
             else:
                 if self.n_factors == 0:
-                    self.beta_p_val = torch.nn.Parameter(torch.zeros((self.n_entries)))
+                    self.beta_p_val = torch.nn.Parameter(
+                        torch.zeros((self.n_entries))
+                    )
                     self.beta_p_val.requires_grad = False
                 else:
-                    raise NotImplementedError("Combination of factorization and masking not implemented yet.")
+                    raise NotImplementedError(
+                        "Combination of factorization and masking not implemented yet."
+                    )
 
+        # Initialize alpha (i. e. net basal transcription rate) for each gene
         # Must be positive
         self.alpha = torch.nn.Parameter(0.001 * torch.exp(torch.randn((n_genes,))))
-        self.alpha_p = torch.nn.Parameter(0.001 * torch.exp(torch.randn((n_genes,))))
+        self.alpha_p = torch.nn.Parameter(0.001 *
+                                          torch.exp(torch.randn((n_genes,))))
+        # Initialize sigma (i.e. effect of Wiener Process on transcription) for each gene
+        # Must be positive
         self.sigma = torch.nn.Parameter(1.0 * torch.exp(torch.randn((n_genes,))))
         self.sigma_p = torch.nn.Parameter(1.0 * torch.exp(torch.randn((n_genes,))))
-
-        if learn_T:
-            self.T = torch.nn.Parameter(torch.tensor(T))
-        else:
-            self.T = torch.tensor(T)  # torch.nn.Parameter(torch.tensor(1.0))
 
         if self.lyapunov_penalty:
             # covariance_matrix = cov_factor @ cov_factor.T + cov_diag
@@ -271,19 +423,23 @@ class BICYCLE(pl.LightningModule):
             # docs
             self.w_cov_diag = torch.nn.Parameter(
                 torch.exp(
-                    0.1
-                    * torch.rand(
-                        (
-                            self.n_contexts,
-                            n_genes,
-                        )
+                    0.1 * torch.rand(
+                        (self.n_contexts, n_genes,)
                     )
                 )
             )
             self.w_cov_factor = torch.nn.Parameter(
-                0.1 * torch.randn((self.n_contexts, n_genes, rank_w_cov_factor))
+                0.1 * torch.randn(
+                    (
+                        self.n_contexts,
+                        n_genes,
+                        rank_w_cov_factor,
+                    )
+                )
             )
 
+        # initialize initial parameters with .data attribute
+        # bypasses autograd
         if init_tensors is not None:
             with torch.no_grad():
                 print("Initializing parameters from data")
@@ -294,6 +450,12 @@ class BICYCLE(pl.LightningModule):
                 if "w_cov_diag" in self.init_tensors:
                     self.w_cov_diag.data = self.init_tensors["w_cov_diag"]
 
+        if learn_T:
+            self.T = torch.nn.Parameter(torch.tensor(T))
+        else:
+            self.T = torch.tensor(T)  # torch.nn.Parameter(torch.tensor(1.0))
+
+        # The following assignments are only relevant for model evaluation
         if gt_beta is not None:
             self.gt_beta = gt_beta
         if train_gene_ko is not None:
@@ -301,7 +463,8 @@ class BICYCLE(pl.LightningModule):
         if test_gene_ko is not None:
             self.test_gene_ko = test_gene_ko
 
-        # Preprocess covariates
+        # Initialization of covariates and coefficients.
+        # Covariate preprocessing not implemented/deprecated
         if covariates is not None:
 
             print("Covariates shape:", covariates.shape)
@@ -315,7 +478,8 @@ class BICYCLE(pl.LightningModule):
             # Remove covariates with zero variance
             # covariates = covariates[:, covariates.std(axis=0) > 0]
             # Orthonormalize covariates
-            # print("- Orthonormalizing covariates... Please run OHE before passing categorical covariates.")
+            # print("- Orthonormalizing covariates...
+            #        Please run OHE before passing categorical covariates.")
             # covariates = covariates - torch.mean(covariates, axis=0)
             # covariates = covariates / ( torch.mean(covariates**2, axis=0) ** 0.5 + 1e-15 )
 
@@ -328,6 +492,22 @@ class BICYCLE(pl.LightningModule):
             self.covariates = None
 
     def configure_optimizers(self):
+        """
+        Configures and returns the optimizer and learning rate scheduler for the model.
+
+        Returns:
+            - If `self.optimizer` is "adam" or "rmsprop", returns an instance of the
+              corresponding optimizer.
+            - If `self.optimizer` is "adamlrs", returns a dictionary containing:
+                - "optimizer": The Adam optimizer instance.
+                - "lr_scheduler": The ReduceLROnPlateau scheduler instance.
+                - "monitor": The metric to monitor for the scheduler ("train_loss").
+
+        Notes:
+            - The "adamlrs" option includes a learning rate scheduler that reduces the
+              learning rate when the monitored metric stops improving. The monitored
+              metric is currently set to "train_loss".
+        """
         print("Using optimizer_kwargs:", self.optimizer_kwargs)
         if self.optimizer == "adam":
             return optim.Adam(self.parameters(), lr=self.lr, **self.optimizer_kwargs)
@@ -346,48 +526,96 @@ class BICYCLE(pl.LightningModule):
             }
 
     def get_updated_states(self):
-        iv_a = (1 - self.gt_interv).T
+        """
+        Updates beta, alpha and sigma matrices based on intervention ground truth,
+        perturbation type and configuration.
 
+        Returns:
+            tuple: A tuple containing:
+                - alphas (torch.Tensor): The updated alpha values, which represent
+                  the initial transcription rate for genes in perturbed cells.
+                - betas (torch.Tensor): The updated beta values, which represent
+                  the gene-to-gene interactions for each perturbation scenario.
+                - B (torch.Tensor): A matrix derived from betas. B = I - betas^T
+                - sigmas (torch.Tensor): The updated sigma values, which represent
+                  the variance or uncertainty in the model for each perturbation scenario.
+
+        Raises:
+            NotImplementedError: If the intervention type is not "Cas9" or "dCas9".
+            NotImplementedError: If a combination of factorization and masking is
+                                 attempted, which is not yet implemented.
+
+        Notes:
+            - The function handles two intervention types: "Cas9" and "dCas9".
+            - For non-factorizing cases, beta values are directly updated based on
+              the intervention type and ground truth interventions.
+            - For factorizing cases, beta values are computed as a product of
+              gene-to-factor and factor-to-gene matrices, with adjustments for
+              interventions.
+            - Diagonal elements of beta matrices are set to zero to inhibit
+              self-regulation.
+        """
+
+        # Resets beta to masked beta_val if masked not None
         if self.mask is not None:
             self.beta = torch.zeros((self.n_genes, self.n_genes), device=self.device)
             self.beta[self.beta_idx[0], self.beta_idx[1]] = self.beta_val.to(self.device)
             self.beta_p = torch.zeros((self.n_genes, self.n_genes), device=self.device)
             self.beta_p[self.beta_idx[0], self.beta_idx[1]] = self.beta_p_val.to(self.device)
 
+        # Defines iv_a as transformed ground truth of interventions.
+        # With interventions as 0 and rest as 1
+        iv_a = (1 - self.gt_interv).T
         iv_a = iv_a.to(self.device)
 
+        # for non factorizing case:
+        # initializes betas as merge of
+        # beta and beta_p with gt_interv as mask
         if self.n_factors == 0:
+            # in case of CRISPR-interference
             if self.intervention_type == "dCas9":
                 betas = iv_a[:, None, :] * self.beta.to(self.device) + (1 - iv_a)[
                     :, None, :
-                ] * self.beta_p.to(self.device)
+                ] * self.beta_p.to(self.device)# beta pert updated
+            # in case of knockout/knockdown
             elif self.intervention_type == "Cas9":
                 betas = iv_a[:, :, None] * self.beta.to(self.device) + (1 - iv_a)[
                     :, :, None
                 ] * self.beta_p.to(self.device)
             else:
-                raise NotImplementedError("Currently only Cas9 and dCas9 are supported as intervention_type.")
+                raise NotImplementedError(
+                    "Currently only Cas9 and dCas9 are supported as intervention_type."
+                    )
         else:
             if self.mask is None:
                 if self.intervention_type == "dCas9":
+                    # merge factor to gene matrix
                     factor2genes = iv_a[:, None, :] * self.factor2gene.to(self.device) + (1 - iv_a)[
                         :, None, :
                     ] * self.factor2gene_p.to(self.device)
+                    # initialize betas as gene to gene matrix
                     betas = torch.einsum("bij,bjk->bik", self.gene2factor[None, :, :], factor2genes)
+                    # set betas diagonale to zero to inhibit self-regulation
                     betas_diag = torch.diagonal(betas, offset=0, dim1=-2, dim2=-1)
                     betas_diag[:] = 0.0
 
+                    # update self.beta to gene-gene matrix and set diagonal to 0
                     self.beta = torch.einsum("ij,jk->ik", self.gene2factor, self.factor2gene)
                     beta_diag = torch.diagonal(self.beta, offset=0, dim1=-2, dim2=-1)
                     beta_diag[:] = 0
+
                 elif self.intervention_type == "Cas9":
+                    # merge factor to gene matrix
                     gene2factors = iv_a[:, :, None] * self.gene2factor.to(self.device) + (1 - iv_a)[
                         :, :, None
                     ] * self.gene2factor_p.to(self.device)
+                    # initialize betas as gene to gene matrix
                     betas = torch.einsum("bij,bjk->bik", gene2factors, self.factor2gene[None, :, :])
+                    # set betas diagonale to zero to inhibit self-regulation
                     betas_diag = torch.diagonal(betas, offset=0, dim1=-2, dim2=-1)
                     betas_diag[:] = 0.0
 
+                    # update self.beta to gene-gene matrix and set diagonal to 0
                     self.beta = torch.einsum("ij,jk->ik", self.gene2factor, self.factor2gene)
                     beta_diag = torch.diagonal(self.beta, offset=0, dim1=-2, dim2=-1)
                     beta_diag[:] = 0
@@ -396,7 +624,9 @@ class BICYCLE(pl.LightningModule):
                         "Currently only Cas9 and dCas9 are supported as intervention_type."
                     )
             else:
-                raise NotImplementedError("Combination of factorization and masking not implemented yet.")
+                raise NotImplementedError(
+                    "Combination of factorization and masking not implemented yet."
+                    )
 
         if self.intervention_type == "dCas9":
             alphas = (
@@ -404,17 +634,23 @@ class BICYCLE(pl.LightningModule):
                 + (1 - iv_a) * self.pos(self.alpha_p.to(self.device))[None, :]
             )
 
-            sigmas = iv_a[:, None, :] * torch.diag(self.pos(self.sigma) + self.sigma_min) + (1 - iv_a)[
+            sigmas = iv_a[:, None, :] * torch.diag(self.pos(self.sigma) +
+                                                   self.sigma_min) + (1 - iv_a)[
                 :, None, :
             ] * torch.diag(self.pos(self.sigma_p) + self.sigma_min)
         elif self.intervention_type == "Cas9":
-            alphas = self.pos(self.alpha.to(self.device))[None, :].expand(iv_a.shape[0], self.alpha.shape[0])
+            alphas = self.pos(self.alpha.to(self.device))[None, :].expand(
+                iv_a.shape[0], self.alpha.shape[0]
+            )
             sigmas = torch.diag(self.pos(self.sigma) + self.sigma_min)[None, :, :].expand(
                 iv_a.shape[0], self.sigma.shape[0], self.sigma.shape[0]
             )
         else:
-            raise NotImplementedError("Currently only Cas9 and dCas9 are supported as intervention_type.")
+            raise NotImplementedError(
+                "Currently only Cas9 and dCas9 are supported as intervention_type."
+                )
 
+        # initializes B as minus beta transposed with diagonal values of 1
         B = torch.eye(self.n_genes, device=self.device)[None, :, :] - (
             1.0 - torch.eye(self.n_genes, device=self.device)
         )[None, :, :] * betas.transpose(1, 2)
@@ -422,6 +658,7 @@ class BICYCLE(pl.LightningModule):
         return alphas, betas, B, sigmas
 
     def lyapunov_lhs(self, B):
+        """Computes the left-hand side of the time continuous lyapunov equation."""
         mat = B @ (
             torch.diag_embed(self.pos(self.w_cov_diag) + self.sigma_min)
             + self.w_cov_factor @ self.w_cov_factor.transpose(1, 2)
@@ -429,6 +666,7 @@ class BICYCLE(pl.LightningModule):
         return mat + mat.transpose(1, 2)
 
     def lyapunov_rhs(self, sigmas):
+        """Computes right-hand side of the time continuous lyapunov equation."""
         return torch.bmm(sigmas, sigmas.transpose(1, 2))
 
     # def compute_normalisations(self, log_likelihood, z_kl, l1_loss, spectral_loss, loss_lyapunov):
@@ -453,6 +691,7 @@ class BICYCLE(pl.LightningModule):
     #     self._normalisation_computed = True
 
     def scale_losses(self, z_kl, l1_loss, loss_spectral=None, loss_lyapunov=None):
+        """Scales the loss outputs in the training_step."""
         l1_loss = self.scale_l1 * l1_loss
         z_kl = self.scale_kl * z_kl
 
@@ -464,6 +703,7 @@ class BICYCLE(pl.LightningModule):
         return z_kl, l1_loss, loss_spectral, loss_lyapunov
 
     def split_samples(self, samples, sim_regime, sample_idx, data_category):
+        """Splits samples according to data_category."""
         # Split all rows according to is_valid_data
         samples_train = samples[data_category == 0]
         sim_regime_train = sim_regime[data_category == 0]
@@ -488,6 +728,14 @@ class BICYCLE(pl.LightningModule):
         )
 
     def get_x_bar(self, B, alphas, sim_regime):
+        """
+        Computes x_bar = B^(-1) @ alpha.
+
+        Notes:
+            - sim_regime is used to rearrange B and alpha through indexing.
+            - x_bar can be later used as the mean for the latent multivariate normal
+            distribution of gene experession.
+        """
         # Broadcast arrays to batch_shape
         B_broadcasted = B[sim_regime]
         alphas_broadcasted = alphas[sim_regime]
@@ -496,12 +744,32 @@ class BICYCLE(pl.LightningModule):
             B_broadcasted = B_broadcasted.squeeze()
             alphas_broadcasted = alphas_broadcasted.squeeze()
 
+        # Note that x_bar is equivalent to z_bar if no likelihood model is used
         x_bar = torch.linalg.solve(B_broadcasted, alphas_broadcasted[:, :, None]).squeeze()
         # TODO: Use torch.linalg.solve_ex() once it is no longer experimental in pytorch:
         # x_bar = torch.linalg.solve_ex(B_broadcasted, alphas_broadcasted[:, :, None])[0].squeeze()
         return x_bar
 
     def get_mvn_normal(self, B, alphas, sim_regime, sigmas):
+        """
+        Computes the latent multivariate normal distribution of gene expression.
+        E.g. the distribution of z according to the lyapunov equation.
+
+        Args:
+            B: equates to I - beta^T
+            alphas: basal gene transcription rate matrix
+            sim_regime: Index used for restructuring of matrices
+            sigmas: matrix to represent the magrnitude of random fluctuations (Wiener Process).
+
+        Returns:
+            torch.distributions.MultiVariateNormal
+            or
+            torch.distributions.LowRankMultiVariateNormal
+
+        Notes:
+            - See page 215f in the paper for more info.
+        """
+
         x_bar = self.get_x_bar(B, alphas, sim_regime)
 
         if self.lyapunov_penalty:
@@ -526,7 +794,8 @@ class BICYCLE(pl.LightningModule):
             else:
                 return torch.distributions.MultivariateNormal(
                     x_bar,
-                    scale_tril=torch.diag_embed(self.pos(self.w_cov_diag)[sim_regime] + self.sigma_min)
+                    scale_tril=torch.diag_embed(self.pos(self.w_cov_diag)[sim_regime] +
+                                                self.sigma_min)
                     + torch.tril(self.w_cov_factor, diagonal=-1)[sim_regime],
                 )
         else:
@@ -534,13 +803,28 @@ class BICYCLE(pl.LightningModule):
                 B.double(),
                 torch.bmm(sigmas, sigmas.transpose(1, 2)).double(),
             ).float()
-            return torch.distributions.MultivariateNormal(x_bar, covariance_matrix=omegas[sim_regime])
+            return torch.distributions.MultivariateNormal(x_bar,
+                                                          covariance_matrix=omegas[sim_regime])
 
     def _get_posterior_dist(self, sample_idx, samples, sim_regime):
+        """
+        Approximates the latent posterior distribution of x: q(z|x).
+
+        Args:
+            samples: Data tensor with dimensions (batches, genes, cells).
+                Equivalent to x in the paper.
+
+        Returns:
+            torch.distributions.MultivariateNormal
+
+        Notes:
+            - If self.use_encoder: Uses a neural network to infer mean and variance of the distribution.
+            - Else: Uses the self.z_loc and self.z_scale + self.sigma_min attributes as mean and variance.
+        """
         if self.use_encoder:
             gt_nonzeros = self.gt_nonzeros.to(self.device)
 
-            if gt_nonzeros.shape[1] > 1:
+            if gt_nonzeros.shape[1] > 1:            # if statement in squeeze already included (removes all dimensions ==1)
                 ohes = gt_nonzeros[:, sim_regime].T
             else:
                 ohes = gt_nonzeros[:, sim_regime].squeeze().T
@@ -604,7 +888,8 @@ class BICYCLE(pl.LightningModule):
             # TODO: In this case we could regress out the covariates already in the beginning
             # However, this would require to modify the data loader
             if self.covariates is not None:
-                samples = samples - torch.mm(self.covariates[sample_idx], self.cov_coefficients)
+                samples = samples - torch.mm(self.covariates[sample_idx],
+                                             self.cov_coefficients)
             return -1 * mvn.log_prob(samples).mean()
 
     def compute_spectral_loss(self, B):
@@ -644,6 +929,7 @@ class BICYCLE(pl.LightningModule):
         if (len(samples_train) == 0) & self.training:
             return None
 
+        # compute perturbed model
         alphas, _, B, sigmas = self.get_updated_states()
 
         if self.train_only_latents:
@@ -667,9 +953,9 @@ class BICYCLE(pl.LightningModule):
 
         # Add Lyapunov Loss (only for training data)
         if self.lyapunov_penalty & self.training:
-            loss_lyapunov = torch.sum(torch.square(self.lyapunov_lhs(B) - self.lyapunov_rhs(sigmas))) / (
-                self.n_genes**2 * self.n_contexts
-            )
+            loss_lyapunov = torch.sum(
+                torch.square(self.lyapunov_lhs(B) - self.lyapunov_rhs(sigmas))
+            ) / (self.n_genes**2 * self.n_contexts)
         else:
             loss_lyapunov = None
 
@@ -679,14 +965,19 @@ class BICYCLE(pl.LightningModule):
             if self.n_factors == 0:
                 loss_l1 = torch.abs(self.beta).mean()
             else:
-                loss_l1 = 0.5 * (torch.abs(self.gene2factor).mean() + torch.abs(self.factor2gene).mean())
+                loss_l1 = 0.5 * (
+                    torch.abs(self.gene2factor).mean() + torch.abs(self.factor2gene).mean()
+                    )
         else:
             if self.n_factors == 0:
                 loss_l1 = torch.abs(self.beta_val).mean()
             else:
-                raise NotImplementedError("Combination of factorization and masking not implemented yet.")
+                raise NotImplementedError(
+                    "Combination of factorization and masking not implemented yet."
+                    )
 
-        # In case we face valid or test data, we have to detach some parameters that must not get an update
+        # In case we face valid or test data,
+        # we have to detach some parameters that must not get an update
         if (len(samples_valid) > 0) | (len(samples_test) > 0):
             B_detached = B.detach()
             alphas_detached = alphas.detach()
@@ -747,7 +1038,8 @@ class BICYCLE(pl.LightningModule):
 
             # Test Data
             if len(samples_test) > 0:
-                # Block every gradient coming from the MVN via B, but keep gradients on alphas and sigmas
+                # Block every gradient coming from the MVN via B,
+                # but keep gradients on alphas and sigmas
                 mvn_test = self.get_mvn_normal(
                     B_detached,
                     alphas_detached_masked,
@@ -856,6 +1148,20 @@ class BICYCLE(pl.LightningModule):
         self.training_step(batch, batch_idx)
 
     def predict_percentages(self, batch):
+        """
+        Calculates posterior distribution and returns means, normalized to 1.
+
+        Args:
+            batch (tuple): A tuple containing the following elements:
+            - samples (Tensor): The input samples for prediction.
+            - sim_regime (Any): The simulation regime or context for the prediction.
+            - sample_idx (Tensor): Indices of the samples in the batch.
+            - data_category (Any): The category or type of data being processed.
+
+        Returns:
+            Tensor: A tensor containing the percentage gene expression
+            for each gene, computed using the softmax function.
+        """
 
         samples, sim_regime, sample_idx, data_category = batch
 
@@ -867,6 +1173,19 @@ class BICYCLE(pl.LightningModule):
         return ps
 
     def predict_step(self, batch, dataloader_idx=0):
+        """
+        Overrides the pyTorch lightning LightningModule predict_step methods called during :meth:`~pytorch_lightning.trainer.trainer.Trainer.predict`.
+        Super function returns a prediction. This version returns the loss.
+
+        Args:
+            batch (torch.Tensor): Current batch.
+            batch_idx (int): Index of current batch.
+            dataloader_idx (int): Index of the current dataloader.
+
+        Returns:
+            Linear sum of KL-loss and NLL-loss.
+
+        """
         samples, sim_regime, sample_idx, _ = batch
 
         alphas, _, B, sigmas = self.get_updated_states()
@@ -897,12 +1216,13 @@ class BICYCLE(pl.LightningModule):
         return loss
 
     def predict_means(self, regimes=[]):
+        """Method to predict the mean latent expression of genes."""
 
         if len(regimes) < 1 or np.asarray(regimes).max() >= self.n_contexts:
             print("List of regimes to predict not valid... skipping. List:", regimes)
 
         alphas, betas, B, sigmas = self.get_updated_states()
-        sim_regime = torch.tensor(np.asarray(regimes), device=alphas.device).long()
+        sim_regime = torch.Tensor(np.asarray(regimes), device=alphas.device).long()
 
         x_bar = self.get_x_bar(B, alphas, sim_regime)
 
@@ -925,17 +1245,17 @@ class BICYCLE(pl.LightningModule):
         # first: calculate values for alpha_p and sigma_p for the given targets
         # c.f. stationary distribution of univariate Ornstein-Uhlenbeck process,
         # e.g., here: https://en.wikipedia.org/wiki/Ornstein%E2%80%93Uhlenbeck_process
-        sigma_p = math.sqrt(2.0) * torch.tensor(
+        sigma_p = math.sqrt(2.0) * torch.Tensor(
             np.asarray(target_std), device=self.device, dtype=self.sigma.dtype
         )
-        alpha_p = torch.tensor(np.asarray(target_mu), device=self.device, dtype=self.alpha.dtype)
+        alpha_p = torch.Tensor(np.asarray(target_mu), device=self.device, dtype=self.alpha.dtype)
 
         gt_interv_orig = self.gt_interv
 
         self.gt_interv = torch.zeros((self.n_genes, 1))
         self.gt_interv[target_idx, 0] = 1
         self.gt_interv.to(gt_interv_orig.device)
-        alpha, beta, B, sigma = self.get_updated_states()
+        alpha, beta, _, sigma = self.get_updated_states()
         self.gt_interv = gt_interv_orig
 
         alpha = alpha[0]
@@ -983,7 +1303,7 @@ class BICYCLE(pl.LightningModule):
 
         sigma = torch.diag_embed(sigma)
 
-        omega_model = Omega_Iterative(alpha, beta, sigma, device=self.device)
+        omega_model = OmegaIterative(alpha, beta, sigma, device=self.device)
 
         # Empty dataloader, just so PL won't complain
         dataset = TensorDataset(torch.zeros((1, 1)))
@@ -1001,7 +1321,7 @@ class BICYCLE(pl.LightningModule):
         end_time = time.time()
         print(f"Training took {end_time - start_time:.2f} seconds")
 
-    def forward(self):
+    def forward(self, *args, **kwargs):
         raise NotImplementedError()
 
     def on_validation_epoch_end(self):
